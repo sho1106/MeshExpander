@@ -23,11 +23,17 @@ expander::StlWriter::write("expanded.stl", expanded);
 
 ---
 
+## Results
+
+![MeshExpander 3D rotation demo](docs/images/rotate3d.gif)
+
+*Blue: original input mesh · Green: conservative expansion result (distance d guaranteed in every direction) — Hollow Cylinder, Gear (12 teeth), Star Prism*
+
 ## How It Works
 
 ![MeshExpander algorithm demo](docs/images/demo.gif)
 
-*Left: original hollow-cylinder mesh · Center: solid voxelization with BFS flood-fill · Right: conservative expansion by margin d (every input point guaranteed covered)*
+*Left: original mesh · Center: solid voxelization with BFS flood-fill · Right: conservative expansion by margin d*
 
 ---
 
