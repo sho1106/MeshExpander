@@ -62,6 +62,25 @@ def make_hollow_cylinder(Ro=0.060, Ri=0.040, H=0.100, N=32):
     return v[f]   # (M,3,3)
 
 
+def make_torus(R=0.060, r=0.020, Nt=24, Np=16):
+    verts = []
+    for i in range(Nt):
+        u = 2*np.pi*i/Nt
+        for j in range(Np):
+            v = 2*np.pi*j/Np
+            verts.append([(R+r*np.cos(v))*np.cos(u),
+                          (R+r*np.cos(v))*np.sin(u),
+                          r*np.sin(v)])
+    faces = []
+    for i in range(Nt):
+        for j in range(Np):
+            a=i*Np+j; b=((i+1)%Nt)*Np+j
+            c=((i+1)%Nt)*Np+(j+1)%Np; d=i*Np+(j+1)%Np
+            faces += [[a,b,c],[a,c,d]]
+    v=np.array(verts,np.float32); f=np.array(faces,np.int32)
+    return v[f]
+
+
 def make_gear(Rb=0.060, nt=12, th=0.020, H=0.040):
     verts = []
     N2 = nt*2
@@ -134,8 +153,8 @@ SHAPES = [
     dict(name="Gear (12 teeth)",  tris=make_gear(),
          exp_stl="cad_Gear_12-tooth_robust.stl",
          orig_rgb=ORIG_RGB, exp_rgb=EXP_RGB),
-    dict(name="Star Prism",       tris=make_star_prism(),
-         exp_stl="cad_Star_prism_5pt_robust.stl",
+    dict(name="Torus (donut hole)",tris=make_torus(),
+         exp_stl="cad_Torus_R60_r20_robust.stl",
          orig_rgb=ORIG_RGB, exp_rgb=EXP_RGB),
 ]
 
@@ -164,7 +183,7 @@ fig.text(0.5, 0.96,
          fontsize=12, fontweight="bold",
          path_effects=[pe.withStroke(linewidth=3, foreground=BG)])
 
-LABEL_COLORS = ["#58a6ff", "#f0883e", "#e3b341"]
+LABEL_COLORS = ["#58a6ff", "#f0883e", "#3fb950"]
 
 def setup_ax(ax, sh, color):
     ax.set_facecolor(BG)

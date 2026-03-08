@@ -204,7 +204,7 @@ protected:
         try {
             std::filesystem::create_directories("stl_output");
             std::string tag = name;
-            for (char& c : tag) if (c == ' ') c = '_';
+            for (char& c : tag) if (!std::isalnum((unsigned char)c) && c != '-') c = '_';
             Mesh mg = RobustSlicer::merge(poly);
             if (mg.numFaces()>0)
                 StlWriter::write("stl_output/cad_"+tag+"_robust.stl", mg, name);

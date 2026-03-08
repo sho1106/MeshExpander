@@ -5,6 +5,8 @@
 [![CMake](https://img.shields.io/badge/CMake-3.16%2B-green.svg)](https://cmake.org/)
 [![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen.svg)](#tests)
 
+![MeshExpander demo animation](docs/images/demo.gif)
+
 **High-performance, concave-aware 3D mesh expansion library with strict conservative guarantees.**
 
 Given a 3D mesh and an offset distance `d`, MeshExpander produces an output mesh (or set of meshes) that is guaranteed to fully enclose the original shape at distance `d` in every direction — no surface point is ever left uncovered.
@@ -27,7 +29,7 @@ expander::StlWriter::write("expanded.stl", expanded);
 
 ![MeshExpander 3D rotation demo](docs/images/rotate3d.gif)
 
-*Blue: original input mesh · Green: conservative expansion result (distance d guaranteed in every direction) — Hollow Cylinder, Gear (12 teeth), Star Prism*
+*Blue: original input mesh · Green: conservative expansion result (distance d guaranteed in every direction) — Hollow Cylinder, Gear (12 teeth), Torus (donut hole preserved)*
 
 ## How It Works
 
