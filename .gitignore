@@ -1,0 +1,57 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+
+# Test output (large mesh files and STL results)
+tests/data/*.stl
+tests/data/*.ply
+stl_output/
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Stanford Bunny source archive (large file)
+bunny.tar.gz
+bunny/
+
+# IDE files
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+__MACOSX/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Python cache
+__pycache__/
+*.pyc
