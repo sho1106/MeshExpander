@@ -23,6 +23,14 @@ expander::StlWriter::write("expanded.stl", expanded);
 
 ---
 
+## How It Works
+
+![MeshExpander algorithm demo](docs/images/demo.gif)
+
+*Left: original hollow-cylinder mesh · Center: solid voxelization with BFS flood-fill · Right: conservative expansion by margin d (every input point guaranteed covered)*
+
+---
+
 ## Features
 
 | Feature | Detail |
