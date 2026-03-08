@@ -4,6 +4,7 @@
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
 [![CMake](https://img.shields.io/badge/CMake-3.16%2B-green.svg)](https://cmake.org/)
 [![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen.svg)](#tests)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](#python-bindings)
 
 ![MeshExpander demo animation](docs/images/demo.gif)
 
@@ -11,6 +12,7 @@
 
 Given a 3D mesh and an offset distance `d`, MeshExpander produces an output mesh (or set of meshes) that is guaranteed to fully enclose the original shape at distance `d` in every direction — no surface point is ever left uncovered.
 
+**C++ API:**
 ```cpp
 #include "expander/RobustSlicer.hpp"
 
@@ -21,6 +23,22 @@ auto slicer = expander::RobustSlicer::withCellSize(0.005);
 expander::Mesh expanded = slicer.expandMerged(input, 0.002);
 
 expander::StlWriter::write("expanded.stl", expanded);
+```
+
+**Python API:**
+```python
+import meshexpander as me
+import numpy as np
+
+# One-call STL expansion
+result = me.expand_file("model.stl", d=0.002, cell_size=0.005, output_path="expanded.stl")
+
+# NumPy arrays
+out_verts, out_faces = me.expand_np(verts, faces, d=0.002, cell_size=0.005)
+
+# Class API
+slicer = me.RobustSlicer.with_cell_size(0.005)
+expanded = slicer.expand_merged(mesh, d=0.002)
 ```
 
 ---
@@ -49,6 +67,7 @@ expander::StlWriter::write("expanded.stl", expanded);
 | **NaN/Inf safe** | All floating-point edge cases handled with safety margins |
 | **Single-header I/O** | Binary STL reader and writer included, zero extra dependencies |
 | **Header-only Eigen** | Only dependency; fetched automatically by CMake FetchContent |
+| **Python bindings** | pybind11 module with numpy array support (`expand_np`, `expand_file`, STL I/O) |
 
 ---
 
@@ -134,13 +153,58 @@ Coverage and expansion ≥ d hold at 100% for all shapes.
 
 ## Getting Started
 
-### Prerequisites
+### Download prebuilt binaries
+
+Prebuilt libraries and Python wheels are available on the [Releases page](https://github.com/sho1106/MeshExpander/releases):
+
+| Platform | C++ library | Python wheel |
+|---|---|---|
+| Windows x64 | `meshexpander-windows-latest.zip` | `meshexpander-*.whl` |
+| Linux x64 | `meshexpander-ubuntu-latest.zip` | `meshexpander-*.whl` |
+| macOS | `meshexpander-macos-latest.zip` | `meshexpander-*.whl` |
+
+Each zip contains `include/` headers + the static library (`.lib` / `.a`).
+
+### Python bindings
+
+**Install from wheel** (recommended):
+```bash
+pip install meshexpander  # once published to PyPI
+# or: pip install meshexpander-0.1.0-cp312-win_amd64.whl  (from Releases)
+```
+
+**Build from source:**
+```bash
+git clone https://github.com/sho1106/MeshExpander.git
+cd MeshExpander
+pip install scikit-build-core pybind11
+pip install .
+```
+
+```python
+import meshexpander as me
+
+# Expand an STL file
+result = me.expand_file("model.stl", d=0.002, cell_size=0.005)
+me.write_stl("expanded.stl", result)
+
+# NumPy arrays
+import numpy as np
+out_verts, out_faces = me.expand_np(verts, faces, d=0.002, cell_size=0.005)
+
+# Full control
+slicer = me.RobustSlicer.with_cell_size(0.005)
+polytopes = slicer.expand_multi(mesh, d=0.002)   # list of closed convex Meshes
+merged    = slicer.expand_merged(mesh, d=0.002)  # single merged mesh
+```
+
+### C++ — Build from source
+
+#### Prerequisites
 
 - CMake ≥ 3.16
 - C++17 compiler (MSVC 2019+, GCC 9+, Clang 10+)
 - Internet connection (Eigen and GoogleTest are fetched automatically)
-
-### Build
 
 ```bash
 git clone https://github.com/sho1106/MeshExpander.git

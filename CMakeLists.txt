@@ -107,3 +107,34 @@ add_custom_target(check
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running MeshExpander tests"
 )
+
+# ---------- Python bindings (optional, requires pybind11) ----------
+option(MESHEXPANDER_BUILD_PYTHON "Build Python bindings via pybind11" OFF)
+if(MESHEXPANDER_BUILD_PYTHON)
+    FetchContent_Declare(
+        pybind11
+        GIT_REPOSITORY https://github.com/pybind/pybind11.git
+        GIT_TAG        v2.13.6
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(pybind11)
+
+    pybind11_add_module(meshexpander_core
+        python/meshexpander_core.cpp
+    )
+    target_link_libraries(meshexpander_core PRIVATE mesh_expander)
+    target_include_directories(meshexpander_core PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    if(MSVC)
+        target_compile_options(meshexpander_core PRIVATE /utf-8 /W4)
+    endif()
+
+    # Copy built module into python/meshexpander/ for in-tree development
+    add_custom_command(TARGET meshexpander_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:meshexpander_core>
+            ${CMAKE_CURRENT_SOURCE_DIR}/python/meshexpander/
+        COMMENT "Copying meshexpander_core to python/meshexpander/"
+    )
+endif()

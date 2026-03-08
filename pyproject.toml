@@ -1,0 +1,42 @@
+[build-system]
+requires = ["scikit-build-core>=0.9", "pybind11>=2.13"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "meshexpander"
+version = "0.1.0"
+description = "Conservative 3D mesh expansion — concave shape support via solid voxelization"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+keywords = ["3d", "mesh", "expansion", "offset", "cad", "robotics", "collision-detection"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+
+[tool.scikit-build]
+cmake.build-type = "Release"
+cmake.args = ["-DMESHEXPANDER_BUILD_PYTHON=ON"]
+wheel.packages = ["python/meshexpander"]
+
+[tool.scikit-build.cmake.define]
+MESHEXPANDER_BUILD_PYTHON = "ON"
+
+[tool.cibuildwheel]
+build = "cp38-* cp39-* cp310-* cp311-* cp312-*"
+skip  = "*-win32 *-manylinux_i686 *-musllinux*"
+
+[tool.cibuildwheel.windows]
+before-build = ""
+
+[tool.cibuildwheel.linux]
+before-build = ""
+
+[tool.cibuildwheel.macos]
+before-build = ""
