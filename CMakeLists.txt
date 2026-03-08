@@ -88,6 +88,7 @@ add_executable(integration_tests
     tests/integration/test_shape_expansion.cpp
     tests/integration/test_concave_expansion.cpp
     tests/integration/test_stanford_bunny.cpp
+    tests/integration/test_cad_shapes.cpp
 )
 target_link_libraries(integration_tests PRIVATE
     mesh_expander
