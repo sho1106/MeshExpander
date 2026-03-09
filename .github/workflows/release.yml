@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # ── Python wheels via cibuildwheel ────────────────────────────────────────
+  build-wheels:
+    name: Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+
+      - name: Build wheels
+        run: cibuildwheel --output-dir dist
+        env:
+          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+          CIBW_SKIP:  "*-win32 *-manylinux_i686 *-musllinux*"
+          CIBW_BUILD_VERBOSITY: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl
+
+  # ── Native prebuilt libs ──────────────────────────────────────────────────
+  build-native:
+    name: Native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            lib_name: mesh_expander.lib
+            cmake_extra: -G "Visual Studio 17 2022"
+          - os: ubuntu-latest
+            lib_name: libmesh_expander.a
+            cmake_extra: ""
+          - os: macos-latest
+            lib_name: libmesh_expander.a
+            cmake_extra: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build ${{ matrix.cmake_extra }} -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build library
+        run: cmake --build build --config Release --target mesh_expander
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p pkg/include pkg/lib
+          cp -r include/ pkg/
+          find build -name "*.lib" -o -name "*.a" 2>/dev/null | head -1 | xargs -I{} cp {} pkg/lib/ || true
+          find build -name "*.dll" -o -name "*.so" -o -name "*.dylib" 2>/dev/null | head -1 | xargs -I{} cp {} pkg/lib/ || true
+          cd pkg && zip -r ../meshexpander-${{ matrix.os }}.zip .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.os }}
+          path: meshexpander-${{ matrix.os }}.zip
+
+  # ── Create GitHub Release ─────────────────────────────────────────────────
+  create-release:
+    name: Create Release
+    needs: [build-wheels, build-native]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/*.zip
