@@ -55,3 +55,10 @@ desktop.ini
 # Python cache
 __pycache__/
 *.pyc
+
+# Python binding build directories
+build_py*/
+
+# Internal dev-only helper scripts (not for end users)
+scripts/write_voxelgrid.py
+write_cad.py
