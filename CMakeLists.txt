@@ -106,6 +106,24 @@ if(MESHEXPANDER_BUILD_IO)
     endif()
 endif()
 
+# ---------- CLI tool (requires IO layer) ----------
+option(MESHEXPANDER_BUILD_CLI "Build meshexpander_cli (requires MESHEXPANDER_BUILD_IO=ON)" OFF)
+if(MESHEXPANDER_BUILD_CLI)
+    if(NOT MESHEXPANDER_BUILD_IO)
+        message(FATAL_ERROR "MESHEXPANDER_BUILD_CLI requires MESHEXPANDER_BUILD_IO=ON")
+    endif()
+    add_executable(meshexpander_cli src/cli/main.cpp)
+    target_link_libraries(meshexpander_cli PRIVATE mesh_expander_io)
+    target_include_directories(meshexpander_cli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    if(MSVC)
+        target_compile_options(meshexpander_cli PRIVATE /utf-8 /W4)
+    else()
+        target_compile_options(meshexpander_cli PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
 # ---------- Tests ----------
 enable_testing()
 
@@ -138,14 +156,45 @@ include(GoogleTest)
 gtest_discover_tests(unit_tests)
 gtest_discover_tests(integration_tests)
 
+# ---------- IO layer tests (optional, requires Assimp) ----------
+if(MESHEXPANDER_BUILD_IO)
+    add_executable(io_tests
+        tests/io/test_assimp_io.cpp
+    )
+    target_link_libraries(io_tests PRIVATE
+        mesh_expander_io
+        GTest::gtest_main
+    )
+    target_include_directories(io_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    if(MSVC)
+        target_compile_options(io_tests PRIVATE /utf-8 /W4)
+    else()
+        target_compile_options(io_tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    gtest_discover_tests(io_tests)
+endif()
+
 # Custom target that runs only MeshExpander tests (excludes Eigen's own test suite)
-add_custom_target(check
-    COMMAND $<TARGET_FILE:unit_tests>
-    COMMAND $<TARGET_FILE:integration_tests>
-    DEPENDS unit_tests integration_tests
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running MeshExpander tests"
-)
+if(MESHEXPANDER_BUILD_IO)
+    add_custom_target(check
+        COMMAND $<TARGET_FILE:unit_tests>
+        COMMAND $<TARGET_FILE:integration_tests>
+        COMMAND $<TARGET_FILE:io_tests>
+        DEPENDS unit_tests integration_tests io_tests
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Running MeshExpander tests (core + IO)"
+    )
+else()
+    add_custom_target(check
+        COMMAND $<TARGET_FILE:unit_tests>
+        COMMAND $<TARGET_FILE:integration_tests>
+        DEPENDS unit_tests integration_tests
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Running MeshExpander tests"
+    )
+endif()
 
 # ---------- Python bindings (optional, requires pybind11) ----------
 option(MESHEXPANDER_BUILD_PYTHON "Build Python bindings via pybind11" OFF)

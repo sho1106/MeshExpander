@@ -9,6 +9,7 @@
 #include "expander/Mesh.hpp"
 #include "expander/RobustSlicer.hpp"
 #include "expander/ConservativeExpander.hpp"
+#include "expander/AssemblyExpander.hpp"
 #include "expander/StlReader.hpp"
 #include "expander/StlWriter.hpp"
 
@@ -184,6 +185,99 @@ PYBIND11_MODULE(meshexpander_core, mod) {
             py::arg("path"), py::arg("mesh"),
             py::arg("header") = "MeshExpander output",
             "Write Mesh to binary STL file.");
+
+    // ── AssemblyExpander ──────────────────────────────────────────────────────
+
+    py::class_<AssemblyExpander::Options>(mod, "AssemblyExpanderOptions",
+        "Options controlling AssemblyExpander behaviour.")
+        .def(py::init<>())
+        .def_readwrite("resolution", &AssemblyExpander::Options::resolution,
+            "Voxel resolution for concave parts (cell = aabb.maxDim / resolution)")
+        .def_readwrite("cell_size_world", &AssemblyExpander::Options::cellSizeWorld,
+            "Fixed voxel cell size in world units (overrides resolution when > 0)")
+        .def_readwrite("face_normal_merge_deg",
+            &AssemblyExpander::Options::faceNormalMergeDeg,
+            "Angle threshold for merging near-parallel face normals (degrees)")
+        .def_readwrite("convex_tol", &AssemblyExpander::Options::convexTol,
+            "Tolerance for isConvex() test (world units)");
+
+    py::class_<AssemblyExpander>(mod, "AssemblyExpander", R"pbdoc(
+        Conservative expansion for multi-part 3D assemblies.
+
+        Each part is expanded independently using the optimal algorithm:
+        - Convex parts  → ConservativeExpander (single polytope, low polygon count)
+        - Concave parts → RobustSlicer         (voxel-based, concavity-aware)
+
+        Examples
+        --------
+        >>> exp = AssemblyExpander()
+        >>> parts = [mesh_a, mesh_b]
+        >>> parts = AssemblyExpander.merge_contained(parts)
+        >>> result = exp.expand_merged(parts, d=0.002)
+    )pbdoc")
+        .def(py::init<>(), "Default options (resolution=64)")
+        .def(py::init<AssemblyExpander::Options>(), py::arg("options"),
+             "Construct with explicit options")
+        .def("expand", &AssemblyExpander::expand,
+             py::arg("parts"), py::arg("d"),
+             "Expand each part independently. Returns one Mesh per input part.")
+        .def("expand_merged", &AssemblyExpander::expandMerged,
+             py::arg("parts"), py::arg("d"),
+             "Expand all parts and concatenate into a single multi-body mesh.")
+        .def_static("merge_contained", &AssemblyExpander::mergeContained,
+             py::arg("parts"), py::arg("tolerance") = 1e-6,
+             "Merge parts whose bounding box is fully contained within another part's.")
+        .def_static("is_convex", &AssemblyExpander::isConvex,
+             py::arg("mesh"), py::arg("tol") = 1e-6,
+             "Return True if the mesh is approximately convex.");
+
+    // ── Free functions (assembly) ─────────────────────────────────────────────
+
+    mod.def("is_convex",
+        [](const Mesh& mesh, double tol) {
+            return AssemblyExpander::isConvex(mesh, tol);
+        },
+        py::arg("mesh"), py::arg("tol") = 1e-6,
+        "Return True if mesh is approximately convex.");
+
+    mod.def("merge_contained",
+        [](const std::vector<Mesh>& parts, double tol) {
+            return AssemblyExpander::mergeContained(parts, tol);
+        },
+        py::arg("parts"), py::arg("tolerance") = 1e-6,
+        "Merge parts whose bounding box is fully contained within another part's.");
+
+    mod.def("expand_assembly",
+        [](const std::vector<Mesh>& parts, double d,
+           int resolution, double cellSizeWorld, double faceNormalMergeDeg) {
+            AssemblyExpander::Options opts;
+            opts.resolution          = resolution;
+            opts.cellSizeWorld       = cellSizeWorld;
+            opts.faceNormalMergeDeg  = faceNormalMergeDeg;
+            return AssemblyExpander(opts).expand(parts, d);
+        },
+        py::arg("parts"),
+        py::arg("d"),
+        py::arg("resolution")           = 64,
+        py::arg("cell_size_world")      = 0.0,
+        py::arg("face_normal_merge_deg") = 20.0,
+        "Expand each part independently. Returns list[Mesh].");
+
+    mod.def("expand_assembly_merged",
+        [](const std::vector<Mesh>& parts, double d,
+           int resolution, double cellSizeWorld, double faceNormalMergeDeg) {
+            AssemblyExpander::Options opts;
+            opts.resolution          = resolution;
+            opts.cellSizeWorld       = cellSizeWorld;
+            opts.faceNormalMergeDeg  = faceNormalMergeDeg;
+            return AssemblyExpander(opts).expandMerged(parts, d);
+        },
+        py::arg("parts"),
+        py::arg("d"),
+        py::arg("resolution")           = 64,
+        py::arg("cell_size_world")      = 0.0,
+        py::arg("face_normal_merge_deg") = 20.0,
+        "Expand all parts and merge into one multi-body Mesh.");
 
     // ── Convenience functions ─────────────────────────────────────────────────
     mod.def("expand_file",
