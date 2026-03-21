@@ -7,7 +7,9 @@ on:
     branches: [ main, develop ]
 
 jobs:
-  test:
+  # ── C++ core tests ──────────────────────────────────────────────────────────
+  cpp:
+    name: C++ (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -38,3 +40,36 @@ jobs:
     - name: Test
       shell: bash
       run: ctest --test-dir build --output-on-failure --build-config Release -j4
+
+  # ── Python binding tests ─────────────────────────────────────────────────────
+  python:
+    name: Python ${{ matrix.python }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+        python: [ "3.10", "3.12" ]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python }}
+
+    - name: Install build tools (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential ninja-build
+
+    - name: Build and install package
+      shell: bash
+      run: pip install -e . --no-build-isolation -v
+
+    - name: Install test dependencies
+      run: pip install pytest numpy
+
+    - name: Run Python tests
+      run: pytest tests/python/ -v --tb=short
