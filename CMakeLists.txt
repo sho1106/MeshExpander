@@ -47,12 +47,13 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# ---------- Library ----------
+# ---------- Core Library ----------
 add_library(mesh_expander STATIC
     src/ConservativeExpander.cpp
     src/ClippingEngine.cpp
     src/VoxelGrid.cpp
     src/RobustSlicer.cpp
+    src/AssemblyExpander.cpp
 )
 target_include_directories(mesh_expander PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -69,6 +70,42 @@ else()
     target_compile_options(mesh_expander PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# ---------- IO Library (optional, requires Assimp) ----------
+# Provides AssimpLoader / AssimpExporter implementing IModelLoader / IModelExporter.
+# Replaceable with any other loader/exporter by implementing the same interfaces.
+#
+#   cmake -DMESHEXPANDER_BUILD_IO=ON ...
+option(MESHEXPANDER_BUILD_IO "Build Assimp-based IO layer (AssimpLoader/AssimpExporter)" OFF)
+if(MESHEXPANDER_BUILD_IO)
+    FetchContent_Declare(
+        assimp
+        GIT_REPOSITORY https://github.com/assimp/assimp.git
+        GIT_TAG        v5.3.1
+        GIT_SHALLOW    TRUE
+    )
+    set(ASSIMP_BUILD_TESTS        OFF CACHE BOOL "" FORCE)
+    set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+    set(ASSIMP_INSTALL            OFF CACHE BOOL "" FORCE)
+    set(ASSIMP_NO_EXPORT          OFF CACHE BOOL "" FORCE)
+    set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(assimp)
+
+    add_library(mesh_expander_io STATIC
+        src/io/AssimpLoader.cpp
+        src/io/AssimpExporter.cpp
+    )
+    target_include_directories(mesh_expander_io PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_link_libraries(mesh_expander_io PUBLIC mesh_expander assimp)
+    if(MSVC)
+        target_compile_options(mesh_expander_io PRIVATE /utf-8 /W4)
+    else()
+        target_compile_options(mesh_expander_io PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endif()
+
 # ---------- Tests ----------
 enable_testing()
 
@@ -78,6 +115,7 @@ add_executable(unit_tests
     tests/unit/test_clipping_engine.cpp
     tests/unit/test_voxel_grid.cpp
     tests/unit/test_robust_slicer.cpp
+    tests/unit/test_assembly_expander.cpp
 )
 target_link_libraries(unit_tests PRIVATE
     mesh_expander
@@ -89,6 +127,7 @@ add_executable(integration_tests
     tests/integration/test_concave_expansion.cpp
     tests/integration/test_stanford_bunny.cpp
     tests/integration/test_cad_shapes.cpp
+    tests/integration/test_assembly_expansion.cpp
 )
 target_link_libraries(integration_tests PRIVATE
     mesh_expander

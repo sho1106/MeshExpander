@@ -10,46 +10,31 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ ubuntu-latest, windows-latest ]
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Install dependencies (Ubuntu)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake build-essential
-    
-    - name: Install dependencies (Windows)
-      if: runner.os == 'Windows'
-      run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-    
-    - name: Create build directory
-      run: mkdir -p build
+        sudo apt-get install -y cmake build-essential ninja-build
+
+    - name: Configure
       shell: bash
-    
-    - name: Configure project (Ubuntu)
-      if: runner.os == 'Linux'
-      run: cd build && cmake ..
-    
-    - name: Configure project (Windows)
-      if: runner.os == 'Windows'
-      run: cd build && cmake .. -G "Visual Studio 17 2022"
-    
-    - name: Build project (Ubuntu)
-      if: runner.os == 'Linux'
-      run: cd build && cmake --build .
-    
-    - name: Build project (Windows)
-      if: runner.os == 'Windows'
-      run: cd build && cmake --build . --config Release
-    
-    - name: Run tests (Ubuntu)
-      if: runner.os == 'Linux'
-      run: cd build && ctest --output-on-failure
-    
-    - name: Run tests (Windows)
-      if: runner.os == 'Windows'
-      run: cd build && ctest --output-on-failure -C Release
+      run: |
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          cmake -S . -B build -G "Visual Studio 17 2022" -DCMAKE_BUILD_TYPE=Release
+        else
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        fi
+
+    - name: Build
+      run: cmake --build build --config Release --parallel 4
+
+    - name: Test
+      shell: bash
+      run: ctest --test-dir build --output-on-failure --build-config Release -j4
