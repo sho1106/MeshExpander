@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Generate animated GIF demonstrating the ConservativeExpander algorithm.
 
+The key concept: start with a bounding box, then carve away corners one by one
+using each face normal's half-space plane. The result is the expansion model.
+
 4 phases per shape:
-  Phase 1: Input mesh      — polygon outline
-  Phase 2: Face normals    — outward normal vectors appear edge by edge
-  Phase 3: Half-spaces     — boundary planes D_i = max(V·n_i) + d appear one by one
-  Phase 4: Expansion model — intersection of all half-spaces (green)
+  Phase 1: Input mesh          -- polygon outline
+  Phase 2: Bounding box        -- axis-aligned box that encloses input + d
+  Phase 3: Carving             -- each face normal clips the box, removing a wedge
+  Phase 4: Result              -- carved expansion model (green) overlaid on input (blue)
 
 3 shapes cycle: pentagon / hexagon / diamond hexagon
 
@@ -20,7 +23,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.patheffects as pe
+from matplotlib.patches import Polygon as MplPolygon
 from matplotlib.animation import FuncAnimation
+from matplotlib.collections import PatchCollection
 
 os.makedirs(os.path.join(os.path.dirname(__file__), "images"), exist_ok=True)
 OUTPUT = os.path.join(os.path.dirname(__file__), "images", "carving.gif")
@@ -34,232 +39,248 @@ ORANGE = "#f0883e"
 YELLOW = "#e3b341"
 PURPLE = "#bc8cff"
 GREY   = "#484f58"
+RED    = "#f85149"
 
 # ── 2D polygon utilities ───────────────────────────────────────────────────────
 
-def make_polygon(angles_deg, radii):
-    """任意の角度・半径で凸多角形を生成する"""
-    angles = np.radians(angles_deg)
-    pts = np.column_stack([radii * np.cos(angles), radii * np.sin(angles)])
-    return pts.astype(float)
-
 def make_regular(n, R=4.0, offset_deg=90.0):
-    a = np.linspace(offset_deg, offset_deg + 360, n, endpoint=False)
-    return make_polygon(a, R)
+    a = np.radians(np.linspace(offset_deg, offset_deg + 360, n, endpoint=False))
+    return np.column_stack([R * np.cos(a), R * np.sin(a)]).astype(float)
 
 def make_diamond(R=4.0):
-    a = [90, 30, 330, 270, 210, 150]
-    r = [R, R*0.75, R, R, R*0.75, R]
-    return make_polygon(a, r)
+    a = np.radians([90, 30, 330, 270, 210, 150])
+    r = np.array([R, R*0.72, R, R, R*0.72, R])
+    return np.column_stack([r * np.cos(a), r * np.sin(a)]).astype(float)
 
-def edge_normals(poly):
-    """各辺の外向き単位法線と中点を返す (n 辺分)"""
+def make_arrowhead(R=4.0):
+    """非対称な凸多角形（矢じり形）"""
+    pts = np.array([
+        [0,  R],
+        [R*0.7,  0],
+        [R*0.3, -R*0.4],
+        [-R*0.3, -R*0.4],
+        [-R*0.7,  0],
+    ], dtype=float)
+    return pts
+
+def edge_normals_and_offsets(poly, d):
+    """各辺の (外向き単位法線, D_i = max(V·n) + d, 辺の中点) を返す"""
     n = len(poly)
-    normals, midpoints = [], []
+    normals, offsets, midpoints = [], [], []
     for i in range(n):
         p0 = poly[i]
         p1 = poly[(i + 1) % n]
         edge = p1 - p0
-        # 右回り法線 (外向き)
-        normal = np.array([edge[1], -edge[0]])
+        normal = np.array([edge[1], -edge[0]], dtype=float)
         normal /= np.linalg.norm(normal)
+        D = float((poly @ normal).max()) + d   # D_i = max(V·n) + d
         normals.append(normal)
+        offsets.append(D)
         midpoints.append((p0 + p1) * 0.5)
-    return np.array(normals), np.array(midpoints)
+    return np.array(normals), np.array(offsets), np.array(midpoints)
 
-def halfspace_offset(poly, normal, d):
-    """半空間境界: D = max(V·n) + d を返す"""
-    projections = poly @ normal
-    return projections.max() + d
+def initial_bbox(poly, d, margin=1.5):
+    """入力 + d + margin を包む軸平行矩形の頂点（反時計回り）"""
+    mn = poly.min(axis=0) - d - margin
+    mx = poly.max(axis=0) + d + margin
+    return np.array([
+        [mn[0], mn[1]],
+        [mx[0], mn[1]],
+        [mx[0], mx[1]],
+        [mn[0], mx[1]],
+    ], dtype=float)
 
-def clip_polygon_halfspace(polygon, normal, D):
-    """Sutherland-Hodgman で凸多角形を半空間 {x: x·n <= D} でクリップする"""
+def clip_halfspace(polygon, normal, D):
+    """Sutherland-Hodgman: polygon を {x: x·n <= D} でクリップする"""
     result = []
     n = len(polygon)
     for i in range(n):
         curr = polygon[i]
         nxt  = polygon[(i + 1) % n]
-        d_curr = curr @ normal - D
-        d_nxt  = nxt  @ normal - D
-        if d_curr <= 0:          # curr is inside
+        dc = float(curr @ normal) - D
+        dn = float(nxt  @ normal) - D
+        if dc <= 0:
             result.append(curr)
-        if (d_curr < 0) != (d_nxt < 0):  # edge crosses boundary
-            t = d_curr / (d_curr - d_nxt)
+        if (dc < 0) != (dn < 0):
+            t = dc / (dc - dn)
             result.append(curr + t * (nxt - curr))
-    return np.array(result) if result else np.empty((0, 2))
+    return np.array(result, dtype=float) if result else np.empty((0, 2))
 
-def compute_expansion(poly, normals, d, bound=20.0):
-    """全半空間の交差として膨張モデルを計算する"""
-    # 大きな初期矩形から出発
-    result = np.array([[-bound, -bound], [ bound, -bound],
-                       [ bound,  bound], [-bound,  bound]], dtype=float)
-    for normal in normals:
-        D = halfspace_offset(poly, normal, d)
-        result = clip_polygon_halfspace(result, normal, D)
-        if len(result) == 0:
-            break
-    return result
-
-def poly_bounds(polys, margin=1.5):
-    """複数のポリゴンを内包する軸範囲を返す"""
-    all_pts = np.vstack(polys)
-    mn = all_pts.min(axis=0) - margin
-    mx = all_pts.max(axis=0) + margin
-    cx = (mn[0] + mx[0]) / 2
-    cy = (mn[1] + mx[1]) / 2
-    r  = max(mx[0] - mn[0], mx[1] - mn[1]) / 2
-    return cx - r, cx + r, cy - r, cy + r
+def compute_carving_sequence(poly, d):
+    """
+    バウンディングボックスから始めて各半空間でクリップする列を返す。
+    戻り値: list of (polygon_after_clip, normal, cut_line_endpoints)
+    """
+    normals, offsets, midpoints = edge_normals_and_offsets(poly, d)
+    current = initial_bbox(poly, d)
+    steps = []
+    for k in range(len(normals)):
+        n = normals[k]
+        D = offsets[k]
+        clipped = clip_halfspace(current, n, D)
+        steps.append(dict(
+            before=current.copy(),
+            after=clipped.copy(),
+            normal=n,
+            D=D,
+            midpoint=midpoints[k],
+        ))
+        current = clipped
+    return steps, current  # current = final expansion polygon
 
 # ── shapes ─────────────────────────────────────────────────────────────────────
-D_EXPAND = 1.0   # 膨張量 d
+D_EXPAND = 0.9
 
 SHAPES = []
 for poly, label in [
     (make_regular(5),   "Pentagon"),
-    (make_regular(6),   "Hexagon"),
-    (make_diamond(),    "Diamond Hex"),
+    (make_arrowhead(),  "Arrow"),
+    (make_diamond(),    "Diamond"),
 ]:
-    normals, midpoints = edge_normals(poly)
-    expansion = compute_expansion(poly, normals, D_EXPAND)
+    steps, expansion = compute_carving_sequence(poly, D_EXPAND)
+    bbox = initial_bbox(poly, D_EXPAND)
     SHAPES.append(dict(
-        poly=poly, normals=normals, midpoints=midpoints,
-        expansion=expansion, label=label,
+        poly=poly, label=label,
+        steps=steps, expansion=expansion, bbox=bbox,
     ))
 
-# ── animation parameters ───────────────────────────────────────────────────────
-FPS      = 16
-F_P1     = 18   # Phase1 hold (input mesh)
-F_P2     = 24   # Phase2 duration (normals appear)
-F_P2H    = 10   # Phase2 hold
-F_P3     = 28   # Phase3 duration (half-spaces appear)
-F_P3H    = 12   # Phase3 hold
-F_P4     = 14   # Phase4 duration (expansion fills)
-F_P4H    = 18   # Phase4 hold
-F_XFADE  = 10   # cross-fade frames
+# ── layout ─────────────────────────────────────────────────────────────────────
+FPS = 16
 
-PERIOD   = F_P1 + F_P2 + F_P2H + F_P3 + F_P3H + F_P4 + F_P4H + F_XFADE
-TOTAL_F  = PERIOD * len(SHAPES)
+# フレーム数設定
+F_P1      = 20   # Phase1: input mesh
+F_P2      = 16   # Phase2: bbox appears
+F_P2H     = 8
+F_CARVE   = 10   # Phase3: 1 carve step duration
+F_P3H     = 14   # Phase3: hold after all carves
+F_P4      = 14   # Phase4: result fade-in
+F_P4H     = 22   # Phase4: hold
+F_XFADE   = 12
 
-# ── figure layout ──────────────────────────────────────────────────────────────
-fig = plt.figure(figsize=(13, 4.8), facecolor=BG)
+def frames_for(sh):
+    return F_P1 + F_P2 + F_P2H + F_CARVE * len(sh["steps"]) + F_P3H + F_P4 + F_P4H + F_XFADE
 
-ax_title = fig.add_axes([0.0, 0.90, 1.0, 0.10], facecolor=BG)
+PERIOD = max(frames_for(sh) for sh in SHAPES)
+TOTAL_F = PERIOD * len(SHAPES)
+
+# ── figure ─────────────────────────────────────────────────────────────────────
+fig = plt.figure(figsize=(13, 5.0), facecolor=BG)
+
+ax_title = fig.add_axes([0.0, 0.91, 1.0, 0.09], facecolor=BG)
 ax_title.axis("off")
 ax_title.text(
     0.5, 0.50,
-    "MeshExpander — Conservative Expansion via Half-Space Intersection",
+    "ConservativeExpander: Bounding Box Carving by Face Normals",
     transform=ax_title.transAxes, ha="center", va="center",
     fontsize=12.5, fontweight="bold", color=FG,
     path_effects=[pe.withStroke(linewidth=3, foreground=BG)],
 )
 
-# 4 パネル: 入力 / 面法線 / 半空間生成 / 膨張モデル
 PANEL_W = 0.235
 PANEL_X = [0.01 + k * (PANEL_W + 0.012) for k in range(4)]
-axes    = [fig.add_axes([x, 0.05, PANEL_W, 0.82], facecolor=BG)
+axes    = [fig.add_axes([x, 0.05, PANEL_W, 0.84], facecolor=BG)
            for x in PANEL_X]
 
 PANEL_LABELS = [
-    ("① Input Mesh",      BLUE),
-    ("② Face Normals",    ORANGE),
-    ("③ Half-Spaces",     PURPLE),
-    ("④ Expansion Model", GREEN),
+    ("① Input Mesh",     BLUE),
+    ("② Bounding Box",   ORANGE),
+    ("③ Carving",        RED),
+    ("④ Expansion Model",GREEN),
 ]
 PANEL_SUB = [
-    "polygon boundary",
-    "outward unit normals",
-    "D\u1d62 = max(V\u00b7n\u1d62) + d",
-    "intersection of all half-spaces",
+    "face normals extracted",
+    "bbox encloses input + d",
+    "clip by each face normal",
+    "original inside expansion",
 ]
 
 for ax in axes:
     ax.set_aspect("equal")
     ax.axis("off")
 
+# ── helpers ────────────────────────────────────────────────────────────────────
+
+def view_bounds(sh, margin=1.2):
+    """全ステップを包む表示範囲"""
+    pts = np.vstack([sh["bbox"], sh["poly"]])
+    mn = pts.min(axis=0) - margin
+    mx = pts.max(axis=0) + margin
+    c  = (mn + mx) / 2
+    r  = max(mx - mn) / 2
+    return c[0] - r, c[0] + r, c[1] - r, c[1] + r
+
 def set_lim(ax, sh):
-    polys = [sh["poly"], sh["expansion"]] if len(sh["expansion"]) else [sh["poly"]]
-    xlo, xhi, ylo, yhi = poly_bounds(polys, margin=1.8)
+    xlo, xhi, ylo, yhi = view_bounds(sh)
     ax.set_xlim(xlo, xhi)
     ax.set_ylim(ylo, yhi)
+
+def draw_poly_fill(ax, poly, color, fill_alpha, edge_alpha=1.0, lw=2.0):
+    if len(poly) < 3:
+        return
+    closed = np.vstack([poly, poly[0]])
+    if fill_alpha > 0:
+        ax.fill(*poly.T, color=color, alpha=fill_alpha, zorder=1)
+    ax.plot(*closed.T, color=color, lw=lw, alpha=edge_alpha,
+            zorder=3, solid_capstyle="round", solid_joinstyle="round")
+
+def draw_normals(ax, sh, alpha=1.0, length=1.0):
+    poly = sh["poly"]
+    n = len(poly)
+    for i in range(n):
+        p0 = poly[i]
+        p1 = poly[(i + 1) % n]
+        mid = (p0 + p1) * 0.5
+        edge = p1 - p0
+        nrm = np.array([edge[1], -edge[0]])
+        nrm = nrm / np.linalg.norm(nrm) * length
+        ax.annotate(
+            "", xy=(mid[0] + nrm[0], mid[1] + nrm[1]),
+            xytext=(mid[0], mid[1]),
+            arrowprops=dict(arrowstyle="-|>", color=ORANGE,
+                            lw=1.6, mutation_scale=12),
+            alpha=alpha, zorder=5,
+        )
+
+def draw_cut_line(ax, sh, step_idx, alpha=1.0):
+    """クリップ平面を示す破線を引く"""
+    step = sh["steps"][step_idx]
+    n = step["normal"]
+    D = step["D"]
+    xlo, xhi, ylo, yhi = view_bounds(sh)
+    span = max(xhi - xlo, yhi - ylo) * 1.6
+    # 法線に垂直な接線方向
+    tx, ty = -n[1], n[0]
+    Px, Py = n * D
+    ax.plot([Px - tx * span, Px + tx * span],
+            [Py - ty * span, Py + ty * span],
+            color=RED, lw=1.8, linestyle="--",
+            alpha=alpha * 0.85, zorder=4)
+    # 法線矢印（切断方向を示す）
+    mp = step["midpoint"]
+    ax.annotate(
+        "", xy=(Px, Py),
+        xytext=(mp[0], mp[1]),
+        arrowprops=dict(arrowstyle="-|>", color=ORANGE,
+                        lw=1.4, mutation_scale=11),
+        alpha=alpha * 0.7, zorder=6,
+    )
 
 def draw_labels(active_phase, alpha=1.0):
     for k, ax in enumerate(axes):
         label, color = PANEL_LABELS[k]
-        c     = color if k <= active_phase else GREY
-        a_txt = alpha if k == active_phase else (alpha * 0.6 if k < active_phase else alpha * 0.25)
-        ax.text(0.5, 1.03, label, transform=ax.transAxes,
+        done   = k < active_phase
+        active = k == active_phase
+        pending= k > active_phase
+        c  = color if not pending else GREY
+        ta = alpha if active else (alpha * 0.65 if done else alpha * 0.25)
+        ax.text(0.5, 1.02, label, transform=ax.transAxes,
                 ha="center", va="bottom", fontsize=9.5, fontweight="bold",
-                color=c, alpha=a_txt)
-        ax.text(0.5, -0.02, PANEL_SUB[k], transform=ax.transAxes,
+                color=c, alpha=ta)
+        ax.text(0.5, -0.01, PANEL_SUB[k], transform=ax.transAxes,
                 ha="center", va="top", fontsize=7.5,
-                color=FG if k == active_phase else GREY,
-                alpha=a_txt * 0.85)
+                color=FG if active else GREY, alpha=ta * 0.85)
 
-def draw_polygon(ax, poly, color, lw=2.0, alpha=1.0, fill_alpha=0.0):
-    closed = np.vstack([poly, poly[0]])
-    if fill_alpha > 0:
-        ax.fill(*poly.T, color=color, alpha=fill_alpha, zorder=1)
-    ax.plot(*closed.T, color=color, lw=lw, alpha=alpha, zorder=3,
-            solid_capstyle="round", solid_joinstyle="round")
-
-def draw_shape_name(ax, sh, alpha=1.0):
-    ax.text(0.5, 0.93, sh["label"], transform=ax.transAxes,
-            ha="center", va="top", fontsize=10.5, fontweight="bold",
-            color=FG, alpha=alpha)
-
-def draw_normals(ax, sh, count, alpha=1.0, arrow_len=1.2):
-    mids = sh["midpoints"]
-    norms = sh["normals"]
-    n_total = len(mids)
-    for k in range(min(count, n_total)):
-        mx, my = mids[k]
-        nx, ny = norms[k] * arrow_len
-        ax.annotate(
-            "", xy=(mx + nx, my + ny), xytext=(mx, my),
-            arrowprops=dict(arrowstyle="-|>", color=ORANGE,
-                            lw=1.8, mutation_scale=14),
-            alpha=alpha, zorder=5,
-        )
-
-def draw_halfspaces(ax, sh, count, alpha=1.0):
-    """半空間境界線を引く（D_i = max(V·n_i) + d の位置）"""
-    poly   = sh["poly"]
-    norms  = sh["normals"]
-    xlo, xhi, ylo, yhi = poly_bounds([poly, sh["expansion"]], margin=2.5)
-
-    for k in range(min(count, len(norms))):
-        n = norms[k]
-        D = halfspace_offset(poly, n, D_EXPAND)
-        # 法線方向に垂直な平行線を描く
-        # 線上の1点: P = n * D
-        Px, Py = n * D
-        # 接線方向
-        tx, ty = -n[1], n[0]
-        # 両端まで延ばす (パラメトリック)
-        tmax = max(xhi - xlo, yhi - ylo) * 1.5
-        x0, y0 = Px - tx * tmax, Py - ty * tmax
-        x1, y1 = Px + tx * tmax, Py + ty * tmax
-        ax.plot([x0, x1], [y0, y1],
-                color=PURPLE, lw=1.2, alpha=alpha * 0.65,
-                linestyle="--", zorder=2)
-        # D の注釈（最初の数本だけ）
-        if k < 3:
-            ax.text(Px + n[0] * 0.25, Py + n[1] * 0.25,
-                    f"D{k+1}", color=PURPLE,
-                    fontsize=7, alpha=alpha * 0.85, ha="center", va="center",
-                    zorder=6)
-
-def draw_expansion(ax, sh, t, alpha=1.0):
-    """膨張モデルを t (0→1) で徐々に塗りつぶす"""
-    exp = sh["expansion"]
-    if len(exp) < 3:
-        return
-    ax.fill(*exp.T, color=GREEN, alpha=min(t, 1.0) * 0.30 * alpha, zorder=1)
-    draw_polygon(ax, exp, GREEN, lw=2.2, alpha=min(t, 1.0) * alpha)
-    draw_polygon(ax, sh["poly"], BLUE, lw=1.8,
-                 alpha=0.80 * min(t, 1.0) * alpha)
-
-# ── main animate function ──────────────────────────────────────────────────────
+# ── animate ────────────────────────────────────────────────────────────────────
 
 def animate(frame):
     for ax in axes:
@@ -271,100 +292,137 @@ def animate(frame):
     sh  = SHAPES[si]
     loc = frame - si * PERIOD
 
-    # クロスフェード alpha
-    xfade_start = PERIOD - F_XFADE
-    alpha = 1.0 if loc < xfade_start else max(0.0, 1.0 - (loc - xfade_start) / F_XFADE)
+    nsteps    = len(sh["steps"])
+    F_P3_TOTAL= F_CARVE * nsteps
+    t_p1_end  = F_P1
+    t_p2_end  = t_p1_end + F_P2 + F_P2H
+    t_p3_end  = t_p2_end + F_P3_TOTAL + F_P3H
+    t_p4_end  = t_p3_end + F_P4 + F_P4H
+    t_xfade   = t_p4_end
 
-    # 各フェーズの境界
-    t1 = F_P1
-    t2 = t1 + F_P2 + F_P2H
-    t3 = t2 + F_P3 + F_P3H
-    t4 = t3 + F_P4 + F_P4H
+    alpha = 1.0 if loc < t_xfade else max(0.0, 1.0 - (loc - t_xfade) / F_XFADE)
 
-    # ── Phase 1: 入力メッシュ ──────────────────────────────────────────────────
-    if loc <= t4:
-        ax = axes[0]
-        set_lim(ax, sh)
-        draw_polygon(ax, sh["poly"], BLUE, alpha=alpha, fill_alpha=0.10 * alpha)
-        draw_shape_name(ax, sh, alpha=alpha)
+    # アクティブフェーズ判定
+    if loc < t_p1_end:
+        active_phase = 0
+    elif loc < t_p2_end:
+        active_phase = 1
+    elif loc < t_p3_end:
+        active_phase = 2
+    else:
+        active_phase = 3
 
-    # ── Phase 2: 面法線 ────────────────────────────────────────────────────────
-    if loc >= t1:
+    # ── Panel 0: Input Mesh ──────────────────────────────────────────────────
+    ax = axes[0]
+    set_lim(ax, sh)
+    draw_poly_fill(ax, sh["poly"], BLUE, 0.12 * alpha, alpha)
+    draw_normals(ax, sh, alpha=alpha * 0.75)
+    ax.text(0.5, 0.94, sh["label"], transform=ax.transAxes,
+            ha="center", va="top", fontsize=10, fontweight="bold",
+            color=FG, alpha=alpha)
+
+    # ── Panel 1: Bounding Box ────────────────────────────────────────────────
+    if loc >= t_p1_end:
         ax = axes[1]
         set_lim(ax, sh)
-        draw_polygon(ax, sh["poly"], BLUE, alpha=alpha * 0.7, fill_alpha=0.07 * alpha)
-        elapsed = loc - t1
-        n_total = len(sh["normals"])
-        n_show  = int(np.clip(elapsed / F_P2 * n_total, 0, n_total))
-        draw_normals(ax, sh, n_show, alpha=alpha)
-        # 全法線表示後は完全に
-        if loc >= t1 + F_P2:
-            draw_normals(ax, sh, n_total, alpha=alpha)
+        # bbox の出現フェード
+        t_bb = np.clip((loc - t_p1_end) / max(F_P2, 1), 0.0, 1.0)
+        draw_poly_fill(ax, sh["poly"], BLUE, 0.08 * alpha, 0.4 * alpha)
+        draw_poly_fill(ax, sh["bbox"], ORANGE, 0.06 * t_bb * alpha,
+                       t_bb * alpha, lw=1.8)
+        # d の矢印（bbox 右辺 → poly 右辺）
+        if t_bb > 0.5:
+            arr_a = (t_bb - 0.5) * 2 * alpha
+            rx_poly = sh["poly"][:, 0].max()
+            rx_bbox = sh["bbox"][:, 0].max()
+            cy = 0.0
+            ax.annotate(
+                "", xy=(rx_bbox, cy), xytext=(rx_poly, cy),
+                arrowprops=dict(arrowstyle="<->", color=YELLOW,
+                                lw=1.4, mutation_scale=11),
+                alpha=arr_a, zorder=7,
+            )
+            ax.text((rx_poly + rx_bbox) / 2, cy + 0.3, "d",
+                    color=YELLOW, fontsize=9, fontweight="bold",
+                    ha="center", alpha=arr_a)
 
-    # ── Phase 3: 半空間 ────────────────────────────────────────────────────────
-    if loc >= t2:
+    # ── Panel 2: Carving ─────────────────────────────────────────────────────
+    if loc >= t_p2_end:
         ax = axes[2]
         set_lim(ax, sh)
-        draw_polygon(ax, sh["poly"], BLUE, alpha=alpha * 0.5, fill_alpha=0.05 * alpha)
-        elapsed = loc - t2
-        n_total = len(sh["normals"])
-        n_show  = int(np.clip(elapsed / F_P3 * n_total, 0, n_total))
-        draw_halfspaces(ax, sh, n_show, alpha=alpha)
-        # 法線も薄く残す
-        draw_normals(ax, sh, n_total, alpha=alpha * 0.35, arrow_len=0.7)
-        if loc >= t2 + F_P3:
-            draw_halfspaces(ax, sh, n_total, alpha=alpha)
+        elapsed = loc - t_p2_end
+        # 何ステップ目まで完了しているか
+        step_done = min(int(elapsed // F_CARVE), nsteps)
+        step_frac = np.clip((elapsed % F_CARVE) / F_CARVE, 0.0, 1.0) \
+                    if step_done < nsteps else 1.0
 
-    # ── Phase 4: 削り出し膨張 ──────────────────────────────────────────────────
-    if loc >= t3:
+        # 現在の削られたポリゴン
+        if step_done == 0:
+            current_poly = sh["bbox"]
+        else:
+            current_poly = sh["steps"][step_done - 1]["after"]
+
+        # 元形状（薄く）
+        draw_poly_fill(ax, sh["poly"], BLUE, 0.06 * alpha, 0.35 * alpha)
+
+        # 現在のポリゴン（削られていく）
+        draw_poly_fill(ax, current_poly, ORANGE, 0.10 * alpha,
+                       alpha, lw=2.0)
+
+        # 現在削っている面の切断線とアニメーション
+        if step_done < nsteps and elapsed >= 0:
+            draw_cut_line(ax, sh, step_done, alpha=step_frac * alpha)
+            # 切断後のプレビュー（半透明で次の形）
+            if step_frac > 0.4:
+                next_poly = sh["steps"][step_done]["after"]
+                t_preview = (step_frac - 0.4) / 0.6
+                draw_poly_fill(ax, next_poly, GREEN,
+                               0.12 * t_preview * alpha,
+                               t_preview * alpha * 0.6, lw=1.5)
+
+        # 何ステップ目か表示
+        if step_done > 0 and step_done <= nsteps:
+            ax.text(0.5, 0.06,
+                    f"cut {step_done}/{nsteps}",
+                    transform=ax.transAxes, ha="center", va="bottom",
+                    fontsize=8.5, color=RED, alpha=alpha)
+
+    # ── Panel 3: Expansion Model ─────────────────────────────────────────────
+    if loc >= t_p3_end:
         ax = axes[3]
         set_lim(ax, sh)
-        # 半空間境界を薄く残す
-        draw_halfspaces(ax, sh, len(sh["normals"]), alpha=alpha * 0.25)
-        elapsed = loc - t3
-        t_fill  = np.clip(elapsed / F_P4, 0.0, 1.0)
-        draw_expansion(ax, sh, t_fill, alpha=alpha)
-        # 膨張量 d の矢印
-        if t_fill > 0.6 and len(sh["expansion"]) >= 3:
-            exp = sh["expansion"]
-            poly = sh["poly"]
-            # 最も右の辺の外向き点で矢印
-            k = int(np.argmax(exp[:, 0]))
-            px = poly[np.argmax(poly[:, 0])]
-            ex = exp[k]
-            mid_y = (px[1] + ex[1]) / 2
+        t_fade = np.clip((loc - t_p3_end) / F_P4, 0.0, 1.0)
+        # 膨張モデル（緑）
+        draw_poly_fill(ax, sh["expansion"], GREEN,
+                       0.18 * t_fade * alpha, t_fade * alpha, lw=2.2)
+        # 元形状（青、内側に収まっている）
+        draw_poly_fill(ax, sh["poly"], BLUE,
+                       0.15 * t_fade * alpha, 0.85 * t_fade * alpha)
+        # d の矢印
+        if t_fade > 0.6:
+            arr_a = (t_fade - 0.6) / 0.4 * alpha
+            rx_p = sh["poly"][:, 0].max()
+            rx_e = sh["expansion"][:, 0].max()
+            cy = 0.0
             ax.annotate(
-                "", xy=(ex[0], mid_y), xytext=(px[0], mid_y),
+                "", xy=(rx_e, cy), xytext=(rx_p, cy),
                 arrowprops=dict(arrowstyle="<->", color=YELLOW,
-                                lw=1.6, mutation_scale=12),
-                alpha=t_fill * alpha, zorder=7,
+                                lw=1.4, mutation_scale=11),
+                alpha=arr_a, zorder=7,
             )
-            ax.text((px[0] + ex[0]) / 2, mid_y + 0.35, "d",
-                    color=YELLOW, fontsize=10, fontweight="bold",
-                    ha="center", va="bottom",
-                    alpha=t_fill * alpha, zorder=8)
+            ax.text((rx_p + rx_e) / 2, cy + 0.3, "d",
+                    color=YELLOW, fontsize=9, fontweight="bold",
+                    ha="center", alpha=arr_a)
 
-    # アクティブフェーズを計算してラベルを描く
-    if loc < t1:
-        phase = 0
-    elif loc < t2:
-        phase = 1
-    elif loc < t3:
-        phase = 2
-    else:
-        phase = 3
-
-    draw_labels(phase, alpha=alpha)
+    draw_labels(active_phase, alpha=alpha)
     return []
 
-
 # ── render ─────────────────────────────────────────────────────────────────────
-
 anim = FuncAnimation(fig, animate, frames=TOTAL_F,
                      init_func=lambda: [], blit=False, repeat=True)
 
-print(f"Rendering {TOTAL_F} frames ({len(SHAPES)} shapes) → {OUTPUT}")
+print(f"Rendering {TOTAL_F} frames ({len(SHAPES)} shapes) -> {OUTPUT}")
 sys.stdout.flush()
 anim.save(OUTPUT, writer="pillow", fps=FPS, dpi=90)
-print(f"Done  {os.path.getsize(OUTPUT) / 1024:.0f} KB  → {OUTPUT}")
+print(f"Done  {os.path.getsize(OUTPUT) / 1024:.0f} KB  -> {OUTPUT}")
 plt.close()
