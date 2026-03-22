@@ -132,18 +132,24 @@ std::vector<Mesh> AssemblyExpander::mergeContained(const std::vector<Mesh>& part
 }
 
 // ---------------------------------------------------------------------------
-// expandPart() — choose algorithm based on convexity
+// expandPart() — choose algorithm based on options
 // ---------------------------------------------------------------------------
 Mesh AssemblyExpander::expandPart(const Mesh& part, double d) const
 {
     if (part.empty() || part.faces.empty()) return {};
 
+    if (!opts_.useVoxelPartitioning) {
+        // Default: ConservativeExpander for all parts.
+        // Part boundaries are driven by the file's mesh structure.
+        ConservativeExpander exp({}, opts_.faceNormalMergeDeg);
+        return exp.expand(part, d);
+    }
+
+    // Opt-in voxel partitioning: use RobustSlicer for concave parts.
     if (isConvex(part, opts_.convexTol)) {
-        // Convex: single polytope, fewer polygons
         ConservativeExpander exp({}, opts_.faceNormalMergeDeg);
         return exp.expand(part, d);
     } else {
-        // Concave: voxel-based multi-polytope, merged into one mesh
         RobustSlicer slicer = (opts_.cellSizeWorld > math::kEpsilon)
             ? RobustSlicer::withCellSize(opts_.cellSizeWorld, opts_.faceNormalMergeDeg)
             : RobustSlicer(opts_.resolution, opts_.faceNormalMergeDeg);

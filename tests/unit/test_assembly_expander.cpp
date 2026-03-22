@@ -152,18 +152,15 @@ TEST(AssemblyExpander, ExpandConvexPart_NonEmpty) {
 }
 
 TEST(AssemblyExpander, ExpandConcavePart_NonEmpty) {
-    AssemblyExpander::Options opts;
-    opts.resolution = 8;
-    AssemblyExpander exp(opts);
+    // Default mode: ConservativeExpander applies to all parts (including concave)
+    AssemblyExpander exp;
     auto results = exp.expand({makeLShapeMesh()}, 0.1);
     ASSERT_EQ(results.size(), 1u);
     EXPECT_GT(results[0].numFaces(), 0);
 }
 
 TEST(AssemblyExpander, ExpandMultiPart_CountPreserved) {
-    AssemblyExpander::Options opts;
-    opts.resolution = 8;
-    AssemblyExpander exp(opts);
+    AssemblyExpander exp;
 
     // Two separated parts
     Mesh cube  = makeCubeMesh(1.0, Eigen::Vector3d(-5, 0, 0));
@@ -179,9 +176,7 @@ TEST(AssemblyExpander, ExpandMultiPart_CountPreserved) {
 // expandMerged
 // ---------------------------------------------------------------------------
 TEST(AssemblyExpander, ExpandMerged_NonEmpty) {
-    AssemblyExpander::Options opts;
-    opts.resolution = 8;
-    AssemblyExpander exp(opts);
+    AssemblyExpander exp;
 
     Mesh a = makeCubeMesh(1.0, Eigen::Vector3d(-5, 0, 0));
     Mesh b = makeCubeMesh(1.0, Eigen::Vector3d( 5, 0, 0));
@@ -197,12 +192,13 @@ TEST(AssemblyExpander, ExpandMerged_EmptyInput) {
 }
 
 // ---------------------------------------------------------------------------
-// Convex part produces fewer polygons than concave equivalent
-// (ConservativeExpander returns one polytope; RobustSlicer returns many)
+// With voxel partitioning enabled, concave parts (RobustSlicer) produce more
+// faces than convex parts (ConservativeExpander).
 // ---------------------------------------------------------------------------
 TEST(AssemblyExpander, ConvexFewerPolygonsThanConcave) {
     AssemblyExpander::Options opts;
     opts.resolution = 16;
+    opts.useVoxelPartitioning = true;  // explicitly test RobustSlicer path
     AssemblyExpander exp(opts);
 
     auto convex  = exp.expand({makeCubeMesh(1.0)},   0.1);
@@ -210,7 +206,7 @@ TEST(AssemblyExpander, ConvexFewerPolygonsThanConcave) {
 
     ASSERT_EQ(convex.size(),  1u);
     ASSERT_EQ(concave.size(), 1u);
-    // L-shape expansion via RobustSlicer generates more polytopes → more faces
+    // L-shape via RobustSlicer (voxel partitioning) → many polytopes → more faces
     EXPECT_LT(convex[0].numFaces(), concave[0].numFaces())
-        << "Convex part should produce fewer faces than concave part";
+        << "Convex part should produce fewer faces than concave part (voxel mode)";
 }

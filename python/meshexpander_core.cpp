@@ -191,26 +191,37 @@ PYBIND11_MODULE(meshexpander_core, mod) {
     py::class_<AssemblyExpander::Options>(mod, "AssemblyExpanderOptions",
         "Options controlling AssemblyExpander behaviour.")
         .def(py::init<>())
+        .def_readwrite("use_voxel_partitioning",
+            &AssemblyExpander::Options::useVoxelPartitioning,
+            "When False (default), all parts use ConservativeExpander. "
+            "When True, concave parts use RobustSlicer (voxel-partitioned, tighter fit).")
         .def_readwrite("resolution", &AssemblyExpander::Options::resolution,
-            "Voxel resolution for concave parts (cell = aabb.maxDim / resolution)")
+            "Voxel resolution (used only when use_voxel_partitioning=True). "
+            "Cell size = aabb.maxDim / resolution.")
         .def_readwrite("cell_size_world", &AssemblyExpander::Options::cellSizeWorld,
-            "Fixed voxel cell size in world units (overrides resolution when > 0)")
+            "Fixed voxel cell size in world units (used only when use_voxel_partitioning=True, "
+            "overrides resolution when > 0)")
         .def_readwrite("face_normal_merge_deg",
             &AssemblyExpander::Options::faceNormalMergeDeg,
             "Angle threshold for merging near-parallel face normals (degrees)")
         .def_readwrite("convex_tol", &AssemblyExpander::Options::convexTol,
-            "Tolerance for isConvex() test (world units)");
+            "Tolerance for isConvex() test (used only when use_voxel_partitioning=True)");
 
     py::class_<AssemblyExpander>(mod, "AssemblyExpander", R"pbdoc(
         Conservative expansion for multi-part 3D assemblies.
 
-        Each part is expanded independently using the optimal algorithm:
-        - Convex parts  → ConservativeExpander (single polytope, low polygon count)
-        - Concave parts → RobustSlicer         (voxel-based, concavity-aware)
+        Default behavior (use_voxel_partitioning=False):
+            All parts are expanded with ConservativeExpander regardless of convexity.
+            Part boundaries come from the file's mesh structure (one mesh = one part).
+            Recommended for machining clearance models.
+
+        Optional (use_voxel_partitioning=True):
+            Convex parts  → ConservativeExpander (single polytope, low polygon count)
+            Concave parts → RobustSlicer         (voxel-based, tighter fit)
 
         Examples
         --------
-        >>> exp = AssemblyExpander()
+        >>> exp = AssemblyExpander()                      # voxel partitioning OFF
         >>> parts = [mesh_a, mesh_b]
         >>> parts = AssemblyExpander.merge_contained(parts)
         >>> result = exp.expand_merged(parts, d=0.002)
