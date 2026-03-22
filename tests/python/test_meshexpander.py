@@ -103,73 +103,24 @@ class TestStlIO:
             os.unlink(path)
 
 
-# ── ConservativeExpander ──────────────────────────────────────────────────────
+# ── BoxExpander ───────────────────────────────────────────────────────────────
 
-class TestConservativeExpander:
+class TestBoxExpander:
     def test_cube_expands_conservatively(self):
         cube = make_cube_mesh(2.0)
-        exp = me.ConservativeExpander()
+        exp = me.BoxExpander()
         result = exp.expand(cube, d=0.1)
         assert not result.empty()
         v, _ = result.to_arrays()
-        # expanded cube must contain all original vertices + margin
         assert v.min() <= -2.0
         assert v.max() >= 2.0
 
     def test_expansion_is_larger_than_source(self):
         cube = make_cube_mesh(1.0)
-        exp = me.ConservativeExpander()
+        exp = me.BoxExpander()
         result = exp.expand(cube, d=0.5)
         v, _ = result.to_arrays()
         assert v.max() > 1.0
-
-
-# ── RobustSlicer ─────────────────────────────────────────────────────────────
-
-class TestRobustSlicer:
-    def test_expand_merged_non_empty(self):
-        cube = make_cube_mesh(2.0)
-        slicer = me.RobustSlicer(resolution=16)
-        result = slicer.expand_merged(cube, d=0.1)
-        assert not result.empty()
-
-    def test_with_cell_size(self):
-        cube = make_cube_mesh(2.0)
-        slicer = me.RobustSlicer.with_cell_size(0.5)
-        result = slicer.expand_merged(cube, d=0.1)
-        assert not result.empty()
-
-    def test_expand_multi_returns_list(self):
-        cube = make_cube_mesh(2.0)
-        slicer = me.RobustSlicer(resolution=8)
-        parts = slicer.expand_multi(cube, d=0.1)
-        assert isinstance(parts, list)
-        assert len(parts) > 0
-
-
-# ── is_convex ────────────────────────────────────────────────────────────────
-
-class TestIsConvex:
-    def test_cube_is_convex(self):
-        cube = make_cube_mesh(2.0)
-        assert me.is_convex(cube)
-        assert me.AssemblyExpander.is_convex(cube)
-
-    def test_l_shape_is_not_convex(self):
-        # L-shaped mesh: 12 vertices, concave
-        v = np.array([
-            [-1,-1, 1],[ 1,-1, 1],[ 1, 0, 1],[ 0, 0, 1],[ 0, 1, 1],[-1, 1, 1],
-            [-1,-1,-1],[ 1,-1,-1],[ 1, 0,-1],[ 0, 0,-1],[ 0, 1,-1],[-1, 1,-1],
-        ], dtype=np.float64)
-        f = np.array([
-            [0,1,2],[0,2,3],[0,3,4],[0,4,5],
-            [6,8,7],[6,9,8],[6,10,9],[6,11,10],
-            [0,6,7],[0,7,1],[1,7,8],[1,8,2],
-            [2,8,9],[2,9,3],[3,9,10],[3,10,4],
-            [4,10,11],[4,11,5],[5,11,6],[5,6,0],
-        ], dtype=np.int32)
-        mesh = me.Mesh.from_arrays(v, f)
-        assert not me.is_convex(mesh)
 
 
 # ── merge_contained ───────────────────────────────────────────────────────────
@@ -233,7 +184,6 @@ class TestAssemblyExpander:
 
     def test_options(self):
         opts = me.AssemblyExpanderOptions()
-        opts.resolution = 32
         opts.face_normal_merge_deg = 15.0
         exp = me.AssemblyExpander(opts)
         cube = make_cube_mesh(2.0)
@@ -270,20 +220,20 @@ class TestFreeFunctions:
     def test_expand_assembly_returns_list(self):
         a = make_cube_mesh(2.0, (-5, 0, 0))
         b = make_cube_mesh(2.0, ( 5, 0, 0))
-        result = me.expand_assembly([a, b], d=0.1, resolution=16)
+        result = me.expand_assembly([a, b], d=0.1)
         assert isinstance(result, list)
         assert len(result) == 2
 
     def test_expand_assembly_merged_returns_mesh(self):
         a = make_cube_mesh(2.0, (-5, 0, 0))
         b = make_cube_mesh(2.0, ( 5, 0, 0))
-        result = me.expand_assembly_merged([a, b], d=0.1, resolution=16)
+        result = me.expand_assembly_merged([a, b], d=0.1)
         assert isinstance(result, me.Mesh)
         assert not result.empty()
 
     def test_expand_np(self):
         v, f = make_cube_arrays(2.0)
-        out_v, out_f = me.expand_np(v, f, d=0.1, cell_size=0.5)
+        out_v, out_f = me.expand_np(v, f, d=0.1)
         assert out_v.shape[1] == 3
         assert out_f.shape[1] == 3
         assert out_v.shape[0] > 0
@@ -296,7 +246,7 @@ class TestFreeFunctions:
             out = tmp.name
         try:
             me.write_stl(inp, mesh)
-            result = me.expand_file(inp, d=0.1, cell_size=0.5, output_path=out)
+            result = me.expand_file(inp, d=0.1, output_path=out)
             assert not result.empty()
             assert os.path.getsize(out) > 0
         finally:

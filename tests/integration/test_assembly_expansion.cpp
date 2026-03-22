@@ -103,8 +103,8 @@ TEST(AssemblyExpansion, MixedAssembly_ConvexAndConcave_AllVerticesCovered)
     Mesh cube   = makeCubeMesh(3.0, Eigen::Vector3d(-8, 0, 0));
     Mesh lshape = makeLShapeMesh();
 
-    // Default mode: ConservativeExpander for all parts.
-    // ConservativeExpander guarantees all input vertices lie strictly inside
+    // Default mode: BoxExpander for all parts.
+    // BoxExpander guarantees all input vertices lie strictly inside
     // the output polytope, so coverage holds for both convex and concave parts.
     AssemblyExpander exp;
 

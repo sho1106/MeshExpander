@@ -11,10 +11,11 @@
 
 #include "expander/IModelLoader.hpp"
 
+#include <assimp/matrix4x4.h>
+
 struct aiScene;
 struct aiNode;
 struct aiMesh;
-struct aiMatrix4x4;
 
 namespace expander {
 namespace io {

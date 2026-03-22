@@ -106,19 +106,21 @@ me.expand_file("part.stl", d=0.002, output_path="expanded.stl")
 ```
 入力メッシュ（1 部品）
   │
-  1. 面法線抽出   全三角形の面法線を収集
+  1. 初期ボックス  メッシュの AABB を取得
+  │               expandedBox = AABB ± d  （初期ポリトープ境界）
+  │
+  2. 面法線抽出   全三角形の面法線を収集
   │               20° 以内の近似平行法線をマージ → k 方向
   │
-  2. 半空間生成   各方向 n に対して
+  3. 半空間生成   各方向 n に対して
   │               D_i = max(V · n) + d
   │               （全頂点の法線方向への射影最大値 + オフセット）
   │
-  3. 半空間交差   C(k, 3) 個の平面トリプレットの交点を列挙
-  │               全半空間の内側にある交点のみ保持
+  4. 削り出し     ClippingEngine::clip(expandedBox, 半空間群)
+  │               expandedBox の 6 面 + k 個の面法線半空間 を交差
+  │               → C(k+6, 3) 個の平面トリプレット交点を列挙し保持
   │
-  4. 閉多面体生成  境界頂点を法線周りに角度ソート → 扇形三角分割
-  │
-  出力: 単一の閉凸多面体（頂点数 ≤ C(k, 3)）
+  出力: 単一の閉凸多面体（頂点数 ≤ C(k+6, 3)）
 ```
 
 ### 保守性の保証
@@ -129,15 +131,15 @@ me.expand_file("part.stl", d=0.002, output_path="expanded.stl")
 v · n_i  ≤  max(V · n_i)  =  D_i - d  <  D_i
 ```
 
-したがって `v` は出力多面体の**すべての半空間の内側**に距離 `d` のマージンをもって収まる。頂点だけでなく、辺・面上の任意の点についても同様の保証が成立する。
+したがって `v` は出力多面体の**すべての半空間の内側**に距離 `d` のマージンをもって収まる。凸形状では辺・面上の任意の点についても同様の保証が成立する。
 
 ### 特性
 
 | 項目 | 内容 |
 |---|---|
 | 出力形状 | 単一の閉凸多面体 |
-| 頂点数上限 | C(k, 3)（入力の面数に比例しない） |
-| 膨張量保証 | 全入力点が出力の内側に距離 d 以上 |
+| 頂点数上限 | C(k+6, 3)（k = 面法線方向数、入力の面数に比例しない） |
+| 膨張量保証 | 全入力頂点が出力の内側に距離 d 以上 |
 | 形状適応 | 面法線ベースのため形状固有の方向を使用 |
 | 数値安全性 | kSafetyMargin = 1e-6 を全半空間に付加 |
 
@@ -226,13 +228,13 @@ expander::StlWriter::write("assembly_expanded.stl", merged);
 ### C++ — 単一メッシュの膨張
 
 ```cpp
-#include "expander/ConservativeExpander.hpp"
+#include "expander/BoxExpander.hpp"
 #include "expander/StlReader.hpp"
 #include "expander/StlWriter.hpp"
 
 expander::Mesh input = expander::StlReader::read("part.stl");
-expander::ConservativeExpander ce;
-expander::Mesh result = ce.expand(input, 0.002);
+expander::BoxExpander exp;
+expander::Mesh result = exp.expand(input, 0.002);
 expander::StlWriter::write("expanded.stl", result);
 ```
 
@@ -301,17 +303,20 @@ examples/cpp/build/Release/visualize.exe part.stl --d 0.002 --side-by-side
 ```
 MeshExpander/
 ├── include/expander/
-│   ├── ConservativeExpander.hpp  コアアルゴリズム（削り出し法）
+│   ├── BoxExpander.hpp           コアアルゴリズム（削り出し法）
 │   ├── AssemblyExpander.hpp      マルチパートオーケストレータ
 │   ├── Mesh.hpp                  頂点 + 面データ構造
 │   ├── MathUtils.hpp             正規化・方向生成・半空間ユーティリティ
-│   ├── ClippingEngine.hpp        半空間クリッピング
+│   ├── ClippingEngine.hpp        半空間クリッピング（BoxExpander 内部）
 │   ├── IModelLoader.hpp          ローダーインタフェース
 │   ├── IModelExporter.hpp        エクスポーターインタフェース
 │   ├── StlReader.hpp             バイナリ STL リーダー（ヘッダーオンリー）
 │   └── StlWriter.hpp             バイナリ STL ライター（ヘッダーオンリー）
 ├── src/
-│   ├── ConservativeExpander.cpp
+│   ├── BoxExpander.cpp
+│   ├── ClippingEngine.cpp
+│   ├── VoxelGrid.cpp
+│   ├── RobustSlicer.cpp
 │   └── AssemblyExpander.cpp
 ├── python/
 │   ├── meshexpander_core.cpp     pybind11 バインディング
@@ -343,9 +348,11 @@ cmake --build build --config Release --target check
 
 | スイート | テスト数 | 検証内容 |
 |---|---|---|
-| ConservativeExpander | 8 | 保守性・堅牢性・頂点数上限 |
+| BoxExpander | 7 | 保守性・堅牢性・頂点数上限 |
 | MathUtils | 10 | 正規化・方向生成・マージ |
 | ClippingEngine | 7 | 半空間クリッピング正確性 |
+| VoxelGrid | 7 | ボクセル化・グリーディマージ |
+| RobustSlicer | 7 | 凹形状展開・保守性 |
 | AssemblyExpander (unit) | 15 | マルチパート展開・mergeContained |
 | ShapeExpansion | 4 | 球・円柱・円錐の精度比 |
 | ConcaveExpansion | 4 | L字・C字の保守性 + 体積比較 |
@@ -361,7 +368,7 @@ cmake --build build --config Release --target check
 1. **ゼロ縮小** — 膨張後の形状は入力 + 距離 `d` を必ず包含する。浮動小数点誤差はすべて外側に押し出す。
 2. **部品境界はファイルから** — CADファイルのメッシュ構造（ソリッドボディ単位）が部品境界を決める。内部再分割は行わない。
 3. **形状適応** — 面法線ベースのため固定方向に依存しない。形状固有の方向で最小の過膨張を実現。
-4. **入力密度非依存** — 出力頂点数は `C(k, 3)` に上限（入力の面数に比例しない）。
+4. **入力密度非依存** — 出力頂点数は `C(k+6, 3)` に上限（k = 面法線方向数、入力の面数に比例しない）。
 5. **数値安全性** — `kSafetyMargin = 1e-6` を全半空間オフセットに加算。縮退面は黙って読み飛ばす。
 
 ---

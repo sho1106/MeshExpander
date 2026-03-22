@@ -49,10 +49,8 @@ FetchContent_MakeAvailable(googletest)
 
 # ---------- Core Library ----------
 add_library(mesh_expander STATIC
-    src/ConservativeExpander.cpp
+    src/BoxExpander.cpp
     src/ClippingEngine.cpp
-    src/VoxelGrid.cpp
-    src/RobustSlicer.cpp
     src/AssemblyExpander.cpp
 )
 target_include_directories(mesh_expander PUBLIC
@@ -128,11 +126,9 @@ endif()
 enable_testing()
 
 add_executable(unit_tests
-    tests/unit/test_conservative_expander.cpp
+    tests/unit/test_box_expander.cpp
     tests/unit/test_math_utils.cpp
     tests/unit/test_clipping_engine.cpp
-    tests/unit/test_voxel_grid.cpp
-    tests/unit/test_robust_slicer.cpp
     tests/unit/test_assembly_expander.cpp
 )
 target_link_libraries(unit_tests PRIVATE
@@ -142,10 +138,10 @@ target_link_libraries(unit_tests PRIVATE
 
 add_executable(integration_tests
     tests/integration/test_shape_expansion.cpp
-    tests/integration/test_concave_expansion.cpp
-    tests/integration/test_stanford_bunny.cpp
     tests/integration/test_cad_shapes.cpp
     tests/integration/test_assembly_expansion.cpp
+    tests/integration/test_complex_assembly.cpp
+    tests/integration/test_complex_shapes.cpp
 )
 target_link_libraries(integration_tests PRIVATE
     mesh_expander
@@ -216,6 +212,12 @@ if(MESHEXPANDER_BUILD_PYTHON)
     )
     if(MSVC)
         target_compile_options(meshexpander_core PRIVATE /utf-8 /W4)
+    endif()
+
+    # When both IO and Python are enabled, expose load_assembly() via Assimp
+    if(MESHEXPANDER_BUILD_IO)
+        target_link_libraries(meshexpander_core PRIVATE mesh_expander_io)
+        target_compile_definitions(meshexpander_core PRIVATE MESHEXPANDER_HAS_IO)
     endif()
 
     # Copy built module into python/meshexpander/ for in-tree development

@@ -7,11 +7,14 @@
 #include <pybind11/eigen.h>
 
 #include "expander/Mesh.hpp"
-#include "expander/RobustSlicer.hpp"
-#include "expander/ConservativeExpander.hpp"
+#include "expander/BoxExpander.hpp"
 #include "expander/AssemblyExpander.hpp"
 #include "expander/StlReader.hpp"
 #include "expander/StlWriter.hpp"
+
+#ifdef MESHEXPANDER_HAS_IO
+#include "io/AssimpLoader.hpp"
+#endif
 
 namespace py = pybind11;
 using namespace expander;
@@ -137,45 +140,39 @@ PYBIND11_MODULE(meshexpander_core, mod) {
                    " faces=" + std::to_string(m.numFaces()) + ">";
         });
 
-    // ── RobustSlicer ──────────────────────────────────────────────────────────
-    py::class_<RobustSlicer>(mod, "RobustSlicer", R"pbdoc(
-        Conservative expansion for concave (non-convex) meshes.
+    // ── BoxExpander ───────────────────────────────────────────────────────────
+    py::class_<BoxExpander>(mod, "BoxExpander", R"pbdoc(
+        削り出し法コア機能 (Carving Expansion Core).
 
-        Uses solid voxelization + top-down box partitioning + per-box
-        local half-space expansion to guarantee every surface point is
-        covered by margin d.
+        Given a box and a mesh, expands the box by d and then carves it
+        using local face normals from mesh faces that overlap the box:
+          1. expandedBox = box ± d
+          2. collectFaces(mesh, box)
+          3. merge near-parallel normals
+          4. D_i = max(local_vertices . n_i) + d
+          5. ClippingEngine::clip(expandedBox, half-spaces) → convex polytope
+
+        When called with only a mesh (convenience overload), the mesh's own
+        AABB is used as the box. This is the default algorithm used by
+        AssemblyExpander for each part.
 
         Examples
         --------
-        >>> slicer = RobustSlicer.with_cell_size(0.005)   # 5 mm cells
-        >>> result = slicer.expand_merged(mesh, d=0.001)   # expand by 1 mm
+        >>> exp = BoxExpander()
+        >>> result = exp.expand(mesh, d=0.002)   # mesh AABB as box
     )pbdoc")
-        .def(py::init<int, double>(),
-             py::arg("resolution") = 64,
+        .def(py::init<double>(),
              py::arg("face_normal_merge_deg") = 20.0,
-             "Adaptive-resolution constructor (cell = aabb.maxDim / resolution)")
-        .def_static("with_cell_size", &RobustSlicer::withCellSize,
-                    py::arg("cell_size"),
-                    py::arg("face_normal_merge_deg") = 20.0,
-                    "Fixed world-space voxel cell size constructor")
-        .def("expand_multi", &RobustSlicer::expandMulti,
+             "Constructor. face_normal_merge_deg: threshold for merging near-parallel normals.")
+        .def("expand",
+             py::overload_cast<const Mesh&, double>(&BoxExpander::expand),
              py::arg("mesh"), py::arg("d"),
-             "Expand into a list of closed convex polytopes (one per box)")
-        .def("expand_merged", &RobustSlicer::expandMerged,
-             py::arg("mesh"), py::arg("d"),
-             "Expand and merge all polytopes into one STL-ready mesh")
-        .def("expand", &RobustSlicer::expand,
-             py::arg("mesh"), py::arg("d"),
-             "Expand (IExpander compat — returns first polytope)");
-
-    // ── ConservativeExpander ──────────────────────────────────────────────────
-    py::class_<ConservativeExpander>(mod, "ConservativeExpander", R"pbdoc(
-        Conservative expansion for convex meshes via half-space intersection.
-    )pbdoc")
-        .def(py::init<>())
-        .def("expand", &ConservativeExpander::expand,
-             py::arg("mesh"), py::arg("d"),
-             "Expand a convex mesh by distance d");
+             "Expand mesh using its own AABB as the initial box.")
+        .def("expand_box",
+             py::overload_cast<const Eigen::AlignedBox3d&, const Mesh&, double>(
+                 &BoxExpander::expand, py::const_),
+             py::arg("box"), py::arg("mesh"), py::arg("d"),
+             "Expand a specific box using nearby face normals from mesh.");
 
     // ── STL I/O ───────────────────────────────────────────────────────────────
     mod.def("read_stl",  &StlReader::read,
@@ -191,42 +188,25 @@ PYBIND11_MODULE(meshexpander_core, mod) {
     py::class_<AssemblyExpander::Options>(mod, "AssemblyExpanderOptions",
         "Options controlling AssemblyExpander behaviour.")
         .def(py::init<>())
-        .def_readwrite("use_voxel_partitioning",
-            &AssemblyExpander::Options::useVoxelPartitioning,
-            "When False (default), all parts use ConservativeExpander. "
-            "When True, concave parts use RobustSlicer (voxel-partitioned, tighter fit).")
-        .def_readwrite("resolution", &AssemblyExpander::Options::resolution,
-            "Voxel resolution (used only when use_voxel_partitioning=True). "
-            "Cell size = aabb.maxDim / resolution.")
-        .def_readwrite("cell_size_world", &AssemblyExpander::Options::cellSizeWorld,
-            "Fixed voxel cell size in world units (used only when use_voxel_partitioning=True, "
-            "overrides resolution when > 0)")
         .def_readwrite("face_normal_merge_deg",
             &AssemblyExpander::Options::faceNormalMergeDeg,
-            "Angle threshold for merging near-parallel face normals (degrees)")
-        .def_readwrite("convex_tol", &AssemblyExpander::Options::convexTol,
-            "Tolerance for isConvex() test (used only when use_voxel_partitioning=True)");
+            "Angle threshold for merging near-parallel face normals (degrees)");
 
     py::class_<AssemblyExpander>(mod, "AssemblyExpander", R"pbdoc(
         Conservative expansion for multi-part 3D assemblies.
 
-        Default behavior (use_voxel_partitioning=False):
-            All parts are expanded with ConservativeExpander regardless of convexity.
-            Part boundaries come from the file's mesh structure (one mesh = one part).
-            Recommended for machining clearance models.
-
-        Optional (use_voxel_partitioning=True):
-            Convex parts  → ConservativeExpander (single polytope, low polygon count)
-            Concave parts → RobustSlicer         (voxel-based, tighter fit)
+        All parts are expanded with BoxExpander (削り出し法) regardless of convexity.
+        Uses mesh AABB as the initial box, then carves with local face normals.
+        Part boundaries come from the file's mesh structure (one mesh = one part).
 
         Examples
         --------
-        >>> exp = AssemblyExpander()                      # voxel partitioning OFF
+        >>> exp = AssemblyExpander()
         >>> parts = [mesh_a, mesh_b]
         >>> parts = AssemblyExpander.merge_contained(parts)
         >>> result = exp.expand_merged(parts, d=0.002)
     )pbdoc")
-        .def(py::init<>(), "Default options (resolution=64)")
+        .def(py::init<>(), "Default options")
         .def(py::init<AssemblyExpander::Options>(), py::arg("options"),
              "Construct with explicit options")
         .def("expand", &AssemblyExpander::expand,
@@ -237,19 +217,9 @@ PYBIND11_MODULE(meshexpander_core, mod) {
              "Expand all parts and concatenate into a single multi-body mesh.")
         .def_static("merge_contained", &AssemblyExpander::mergeContained,
              py::arg("parts"), py::arg("tolerance") = 1e-6,
-             "Merge parts whose bounding box is fully contained within another part's.")
-        .def_static("is_convex", &AssemblyExpander::isConvex,
-             py::arg("mesh"), py::arg("tol") = 1e-6,
-             "Return True if the mesh is approximately convex.");
+             "Merge parts whose bounding box is fully contained within another part's.");
 
     // ── Free functions (assembly) ─────────────────────────────────────────────
-
-    mod.def("is_convex",
-        [](const Mesh& mesh, double tol) {
-            return AssemblyExpander::isConvex(mesh, tol);
-        },
-        py::arg("mesh"), py::arg("tol") = 1e-6,
-        "Return True if mesh is approximately convex.");
 
     mod.def("merge_contained",
         [](const std::vector<Mesh>& parts, double tol) {
@@ -259,66 +229,73 @@ PYBIND11_MODULE(meshexpander_core, mod) {
         "Merge parts whose bounding box is fully contained within another part's.");
 
     mod.def("expand_assembly",
-        [](const std::vector<Mesh>& parts, double d,
-           int resolution, double cellSizeWorld, double faceNormalMergeDeg) {
+        [](const std::vector<Mesh>& parts, double d, double faceNormalMergeDeg) {
             AssemblyExpander::Options opts;
-            opts.resolution          = resolution;
-            opts.cellSizeWorld       = cellSizeWorld;
-            opts.faceNormalMergeDeg  = faceNormalMergeDeg;
+            opts.faceNormalMergeDeg = faceNormalMergeDeg;
             return AssemblyExpander(opts).expand(parts, d);
         },
         py::arg("parts"),
         py::arg("d"),
-        py::arg("resolution")           = 64,
-        py::arg("cell_size_world")      = 0.0,
         py::arg("face_normal_merge_deg") = 20.0,
         "Expand each part independently. Returns list[Mesh].");
 
     mod.def("expand_assembly_merged",
-        [](const std::vector<Mesh>& parts, double d,
-           int resolution, double cellSizeWorld, double faceNormalMergeDeg) {
+        [](const std::vector<Mesh>& parts, double d, double faceNormalMergeDeg) {
             AssemblyExpander::Options opts;
-            opts.resolution          = resolution;
-            opts.cellSizeWorld       = cellSizeWorld;
-            opts.faceNormalMergeDeg  = faceNormalMergeDeg;
+            opts.faceNormalMergeDeg = faceNormalMergeDeg;
             return AssemblyExpander(opts).expandMerged(parts, d);
         },
         py::arg("parts"),
         py::arg("d"),
-        py::arg("resolution")           = 64,
-        py::arg("cell_size_world")      = 0.0,
         py::arg("face_normal_merge_deg") = 20.0,
         "Expand all parts and merge into one multi-body Mesh.");
 
+    // ── Assembly file I/O (requires MESHEXPANDER_HAS_IO / Assimp) ────────────
+#ifdef MESHEXPANDER_HAS_IO
+    mod.def("load_assembly",
+        [](const std::string& path) {
+            expander::io::AssimpLoader loader;
+            return loader.load(path);
+        },
+        py::arg("path"),
+        "Load assembly file (DAE, FBX, OBJ, STL, …) via Assimp.\n"
+        "Returns list[Mesh] — one Mesh per part in the scene graph.\n"
+        "Node transforms are accumulated so all vertices are in world space.\n"
+        "Requires package built with MESHEXPANDER_BUILD_IO=ON.");
+
+    mod.attr("HAS_IO") = true;
+#else
+    mod.attr("HAS_IO") = false;
+#endif
+
     // ── Convenience functions ─────────────────────────────────────────────────
     mod.def("expand_file",
-        [](const std::string& input_path, double d, double cell_size,
+        [](const std::string& input_path, double d,
            const std::string& output_path) -> Mesh {
             Mesh input = StlReader::read(input_path);
             if (input.empty())
                 throw std::runtime_error("Failed to read STL: " + input_path);
-            auto slicer = RobustSlicer::withCellSize(cell_size);
-            Mesh result = slicer.expandMerged(input, d);
+            BoxExpander exp;
+            Mesh result = exp.expand(input, d);
             if (!output_path.empty())
                 StlWriter::write(output_path, result);
             return result;
         },
         py::arg("input_path"),
         py::arg("d"),
-        py::arg("cell_size")   = 0.005,
         py::arg("output_path") = "",
-        "Expand an STL file by distance d. Optionally write result to output_path.");
+        "Expand an STL file by distance d using BoxExpander (削り出し法). "
+        "Optionally write result to output_path.");
 
     mod.def("expand_np",
-        [](DblArray verts, IntArray faces, double d, double cell_size)
+        [](DblArray verts, IntArray faces, double d)
            -> std::pair<py::array_t<double>, py::array_t<int32_t>> {
             return mesh_to_arrays(
-                RobustSlicer::withCellSize(cell_size)
-                    .expandMerged(arrays_to_mesh(verts, faces), d));
+                BoxExpander().expand(arrays_to_mesh(verts, faces), d));
         },
         py::arg("vertices"),
         py::arg("faces"),
         py::arg("d"),
-        py::arg("cell_size") = 0.005,
-        "Expand mesh from numpy arrays. Returns (vertices ndarray[N2,3], faces ndarray[M2,3]).");
+        "Expand mesh from numpy arrays using BoxExpander (削り出し法). "
+        "Returns (vertices ndarray[N2,3], faces ndarray[M2,3]).");
 }

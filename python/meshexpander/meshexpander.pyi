@@ -121,6 +121,29 @@ class AssemblyExpander:
         ...
 
 
+# ── Build feature flags ───────────────────────────────────────────────────────
+
+HAS_IO: bool
+"""True if the package was built with MESHEXPANDER_BUILD_IO=ON (Assimp available).
+load_assembly() is only available when HAS_IO is True."""
+
+
+# ── Assembly file I/O (requires HAS_IO=True) ─────────────────────────────────
+
+def load_assembly(path: str) -> list[Mesh]:
+    """Load assembly file via Assimp, return one Mesh per scene-graph part.
+
+    Supported formats: DAE, FBX, OBJ, GLTF, STL, and all Assimp-supported formats.
+    Node transforms are accumulated so all vertices are in world space.
+
+    Raises
+    ------
+    RuntimeError
+        If the file cannot be read or the package was built without Assimp.
+    """
+    ...
+
+
 # ── STL I/O ──────────────────────────────────────────────────────────────────
 
 def read_stl(path: str) -> Mesh:

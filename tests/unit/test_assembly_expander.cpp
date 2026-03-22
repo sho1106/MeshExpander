@@ -33,7 +33,7 @@ static Mesh makeCubeMesh(double half = 1.0,
     return m;
 }
 
-// L-shaped concave mesh (same as in test_robust_slicer.cpp)
+// L-shaped concave mesh
 static Mesh makeLShapeMesh()
 {
     Mesh m;
@@ -61,37 +61,6 @@ static Mesh makeLShapeMesh()
     m.faces.push_back({4,10,11}); m.faces.push_back({4,11, 5});
     m.faces.push_back({5,11, 6}); m.faces.push_back({5, 6, 0});
     return m;
-}
-
-// ---------------------------------------------------------------------------
-// isConvex
-// ---------------------------------------------------------------------------
-TEST(AssemblyExpander, IsConvex_Cube) {
-    EXPECT_TRUE(AssemblyExpander::isConvex(makeCubeMesh()));
-}
-
-TEST(AssemblyExpander, IsConvex_LShape) {
-    EXPECT_FALSE(AssemblyExpander::isConvex(makeLShapeMesh()));
-}
-
-TEST(AssemblyExpander, IsConvex_EmptyMesh) {
-    Mesh empty;
-    empty.vertices.resize(0, 3);
-    EXPECT_TRUE(AssemblyExpander::isConvex(empty));  // vacuously convex
-}
-
-TEST(AssemblyExpander, IsConvex_Tetrahedron) {
-    // A(0,0,0) B(1,0,0) C(0,1,0) D(0,0,1)
-    // Face windings verified analytically for consistent outward normals:
-    //   {1,2,3}: normal=(1,1,1)/√3 points away from A
-    //   {0,3,2}: normal=(-1,0,0) points away from B
-    //   {0,1,3}: normal=(0,-1,0) points away from C
-    //   {0,2,1}: normal=(0,0,-1) points away from D
-    Mesh tet;
-    tet.vertices.resize(4, 3);
-    tet.vertices << 0,0,0,  1,0,0,  0,1,0,  0,0,1;
-    tet.faces = {{1,2,3}, {0,3,2}, {0,1,3}, {0,2,1}};
-    EXPECT_TRUE(AssemblyExpander::isConvex(tet));
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +111,7 @@ TEST(AssemblyExpander, MergeContained_SinglePart) {
 }
 
 // ---------------------------------------------------------------------------
-// expand — single part, algorithm selection
+// expand — single and multi part
 // ---------------------------------------------------------------------------
 TEST(AssemblyExpander, ExpandConvexPart_NonEmpty) {
     AssemblyExpander exp;
@@ -152,7 +121,7 @@ TEST(AssemblyExpander, ExpandConvexPart_NonEmpty) {
 }
 
 TEST(AssemblyExpander, ExpandConcavePart_NonEmpty) {
-    // Default mode: ConservativeExpander applies to all parts (including concave)
+    // BoxExpander (削り出し法) applies to all parts, including concave
     AssemblyExpander exp;
     auto results = exp.expand({makeLShapeMesh()}, 0.1);
     ASSERT_EQ(results.size(), 1u);
@@ -162,8 +131,7 @@ TEST(AssemblyExpander, ExpandConcavePart_NonEmpty) {
 TEST(AssemblyExpander, ExpandMultiPart_CountPreserved) {
     AssemblyExpander exp;
 
-    // Two separated parts
-    Mesh cube  = makeCubeMesh(1.0, Eigen::Vector3d(-5, 0, 0));
+    Mesh cube   = makeCubeMesh(1.0, Eigen::Vector3d(-5, 0, 0));
     Mesh lshape = makeLShapeMesh();  // around origin
 
     auto results = exp.expand({cube, lshape}, 0.1);
@@ -189,24 +157,4 @@ TEST(AssemblyExpander, ExpandMerged_NonEmpty) {
 TEST(AssemblyExpander, ExpandMerged_EmptyInput) {
     AssemblyExpander exp;
     EXPECT_TRUE(exp.expandMerged({}, 0.1).empty());
-}
-
-// ---------------------------------------------------------------------------
-// With voxel partitioning enabled, concave parts (RobustSlicer) produce more
-// faces than convex parts (ConservativeExpander).
-// ---------------------------------------------------------------------------
-TEST(AssemblyExpander, ConvexFewerPolygonsThanConcave) {
-    AssemblyExpander::Options opts;
-    opts.resolution = 16;
-    opts.useVoxelPartitioning = true;  // explicitly test RobustSlicer path
-    AssemblyExpander exp(opts);
-
-    auto convex  = exp.expand({makeCubeMesh(1.0)},   0.1);
-    auto concave = exp.expand({makeLShapeMesh()}, 0.1);
-
-    ASSERT_EQ(convex.size(),  1u);
-    ASSERT_EQ(concave.size(), 1u);
-    // L-shape via RobustSlicer (voxel partitioning) → many polytopes → more faces
-    EXPECT_LT(convex[0].numFaces(), concave[0].numFaces())
-        << "Convex part should produce fewer faces than concave part (voxel mode)";
 }
