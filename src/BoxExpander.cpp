@@ -31,6 +31,48 @@ std::vector<int> BoxExpander::collectFaces(const Mesh&                mesh,
 }
 
 // ---------------------------------------------------------------------------
+// faceNormals() — unit normals of the given faces (degenerate skipped)
+// ---------------------------------------------------------------------------
+std::vector<Eigen::Vector3d> BoxExpander::faceNormals(
+    const Mesh&             mesh,
+    const std::vector<int>& faceIdx,
+    std::vector<int>*       outValidFaces)
+{
+    std::vector<Eigen::Vector3d> normals;
+    normals.reserve(faceIdx.size());
+    if (outValidFaces) { outValidFaces->clear(); outValidFaces->reserve(faceIdx.size()); }
+
+    for (int fi : faceIdx) {
+        const auto& f = mesh.faces[fi];
+        const Eigen::Vector3d n = math::triangleNormal(
+            mesh.vertices.row(f[0]).transpose(),
+            mesh.vertices.row(f[1]).transpose(),
+            mesh.vertices.row(f[2]).transpose());
+        if (n.squaredNorm() > 0.5) {   // skip degenerate (zero) normals
+            normals.push_back(n);
+            if (outValidFaces) outValidFaces->push_back(fi);
+        }
+    }
+    return normals;
+}
+
+// ---------------------------------------------------------------------------
+// maxSupport() — max projection of the face set's vertices onto n
+// ---------------------------------------------------------------------------
+double BoxExpander::maxSupport(const Mesh&             mesh,
+                               const std::vector<int>& faceIdx,
+                               const Eigen::Vector3d&  n)
+{
+    double maxDot = -std::numeric_limits<double>::infinity();
+    for (int fi : faceIdx) {
+        const auto& f = mesh.faces[fi];
+        for (int k = 0; k < 3; ++k)
+            maxDot = std::max(maxDot, mesh.vertices.row(f[k]).dot(n));
+    }
+    return maxDot;
+}
+
+// ---------------------------------------------------------------------------
 // expand(box, mesh, d) — core carving function
 // ---------------------------------------------------------------------------
 Mesh BoxExpander::expand(const Eigen::AlignedBox3d& box,
@@ -53,16 +95,7 @@ Mesh BoxExpander::expand(const Eigen::AlignedBox3d& box,
     }
 
     // 3. Collect face normals
-    std::vector<Eigen::Vector3d> normals;
-    normals.reserve(faceIdxs.size());
-    for (int fi : faceIdxs) {
-        const auto& f  = mesh.faces[fi];
-        const Eigen::Vector3d n = math::triangleNormal(
-            mesh.vertices.row(f[0]).transpose(),
-            mesh.vertices.row(f[1]).transpose(),
-            mesh.vertices.row(f[2]).transpose());
-        if (n.squaredNorm() > 0.5) normals.push_back(n);   // skip degenerate (zero) normals
-    }
+    const auto normals = faceNormals(mesh, faceIdxs);
 
     // 4. Merge near-parallel normals
     const auto merged = math::mergeDirections(normals, faceNormalMergeDeg_);
@@ -70,15 +103,8 @@ Mesh BoxExpander::expand(const Eigen::AlignedBox3d& box,
     // 5. Build half-spaces: D_i = max(local_vertices . n_i) + d
     std::vector<math::HalfSpace> hs;
     hs.reserve(merged.size());
-    for (const auto& n : merged) {
-        double maxDot = -std::numeric_limits<double>::infinity();
-        for (int fi : faceIdxs) {
-            const auto& f = mesh.faces[fi];
-            for (int k = 0; k < 3; ++k)
-                maxDot = std::max(maxDot, mesh.vertices.row(f[k]).dot(n));
-        }
-        hs.push_back({n, maxDot + d});
-    }
+    for (const auto& n : merged)
+        hs.push_back({n, maxSupport(mesh, faceIdxs, n) + d});
 
     // 6. Clip: expandedBox carved by local half-spaces → single convex polytope
     return ClippingEngine::clip(expandedBox, hs);

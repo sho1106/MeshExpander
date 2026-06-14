@@ -1,11 +1,11 @@
 #pragma once
 // ---------------------------------------------------------------------------
-// ConvexDecomposer — concavity 駆動の適応的空間ボックス分割
+// BoxPartitioner — concavity 駆動の適応的空間ボックス分割
 //
 // 凹メッシュの AABB を、凹さ(concavity)が大きい領域だけを選んで再帰的に
-// 軸平行ボックスへ二分割する。各リーフボックスを BoxExpander::expand(box, mesh, d)
-// で「全メッシュに対して局所削り出し」することで、凹形状でもポケットを埋めずに
-// 膨張モデルを生成できる。
+// 軸平行ボックスへ二分割する。**返すのは凸包ではなく AABB の集合**で、
+// 各ボックスを後段の BoxExpander::expand(box, mesh, d) が削り出して凸ピースにする。
+// ボックス和をとることで、凹形状でもポケットを埋めずに膨張モデルを生成できる。
 //
 // ボクセルグリッドは使わない。分割は concavity が許容値を超える領域に集中するため、
 // 少数ボックス（maxConvexPieces で上限）で済み、resolution パラメータも不要。
@@ -31,7 +31,7 @@
 
 namespace expander {
 
-class ConvexDecomposer {
+class BoxPartitioner {
 public:
     struct Options {
         // 分割を止める concavity 許容値（ワールド単位）。

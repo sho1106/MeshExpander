@@ -44,6 +44,19 @@ public:
     static std::vector<int> collectFaces(const Mesh&                mesh,
                                           const Eigen::AlignedBox3d& box);
 
+    // Unit normals of the given faces, skipping degenerate (zero-area) ones.
+    // If outValidFaces is non-null, it receives the face index parallel to each
+    // returned normal (i.e. the faces that produced a valid normal).
+    static std::vector<Eigen::Vector3d> faceNormals(
+        const Mesh&             mesh,
+        const std::vector<int>& faceIdx,
+        std::vector<int>*       outValidFaces = nullptr);
+
+    // Support value of the face set along n: max over all face vertices of (v · n).
+    static double maxSupport(const Mesh&             mesh,
+                             const std::vector<int>& faceIdx,
+                             const Eigen::Vector3d&  n);
+
 private:
     double faceNormalMergeDeg_;
 };

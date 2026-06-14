@@ -1,4 +1,4 @@
-// Unit tests: ConvexDecomposer（concavity 駆動の空間ボックス分割）
+// Unit tests: BoxPartitioner（concavity 駆動の空間ボックス分割）
 //
 // 検証:
 //   - 凸入力は 1 ボックスに収束（concavity ≈ 0）
@@ -8,7 +8,7 @@
 //   - ボックスは root AABB 内に収まる
 
 #include <gtest/gtest.h>
-#include "expander/ConvexDecomposer.hpp"
+#include "expander/BoxPartitioner.hpp"
 #include "expander/BoxExpander.hpp"
 
 #include <vector>
@@ -75,47 +75,47 @@ static Eigen::AlignedBox3d meshAABB(const Mesh& m) {
 }
 
 // 凸入力（ボックス）の concavity はほぼ 0
-TEST(ConvexDecomposer, ConvexConcavityNearZero) {
+TEST(BoxPartitioner, ConvexConcavityNearZero) {
     const Mesh box = makeBox();
-    const double c = ConvexDecomposer::regionConcavity(box, meshAABB(box), 20.0);
+    const double c = BoxPartitioner::regionConcavity(box, meshAABB(box), 20.0);
     EXPECT_LT(c, 1e-6) << "凸形状の concavity は 0 のはず: " << c;
 }
 
 // 凹入力（L字）の concavity は正
-TEST(ConvexDecomposer, ConcaveConcavityPositive) {
+TEST(BoxPartitioner, ConcaveConcavityPositive) {
     const Mesh L = makeLShapeU();
-    const double c = ConvexDecomposer::regionConcavity(L, meshAABB(L), 20.0);
+    const double c = BoxPartitioner::regionConcavity(L, meshAABB(L), 20.0);
     EXPECT_GT(c, 1.0) << "L字の concavity は正で十分大きいはず: " << c;
 }
 
 // 凸入力は分割されない（1 ボックス）
-TEST(ConvexDecomposer, ConvexStaysSinglePiece) {
+TEST(BoxPartitioner, ConvexStaysSinglePiece) {
     const Mesh box = makeBox();
-    ConvexDecomposer::Options opt;
+    BoxPartitioner::Options opt;
     opt.maxConvexPieces = 8;
     opt.concavityTol    = 0.0;
-    const auto boxes = ConvexDecomposer::partition(box, opt);
+    const auto boxes = BoxPartitioner::partition(box, opt);
     EXPECT_EQ(boxes.size(), 1u);
 }
 
 // 凹入力は複数ボックスに分割される
-TEST(ConvexDecomposer, ConcaveSplits) {
+TEST(BoxPartitioner, ConcaveSplits) {
     const Mesh L = makeLShapeU();
-    ConvexDecomposer::Options opt;
+    BoxPartitioner::Options opt;
     opt.maxConvexPieces = 4;
     opt.concavityTol    = 0.0;
-    const auto boxes = ConvexDecomposer::partition(L, opt);
+    const auto boxes = BoxPartitioner::partition(L, opt);
     EXPECT_GE(boxes.size(), 2u);
     EXPECT_LE(boxes.size(), 4u);
 }
 
 // 出力ボックスはすべて面を含む（空ボックスは除外されている）
-TEST(ConvexDecomposer, OutputBoxesContainFaces) {
+TEST(BoxPartitioner, OutputBoxesContainFaces) {
     const Mesh L = makeLShapeU();
-    ConvexDecomposer::Options opt;
+    BoxPartitioner::Options opt;
     opt.maxConvexPieces = 8;
     opt.concavityTol    = 0.0;
-    const auto boxes = ConvexDecomposer::partition(L, opt);
+    const auto boxes = BoxPartitioner::partition(L, opt);
     ASSERT_FALSE(boxes.empty());
     for (const auto& b : boxes)
         EXPECT_FALSE(BoxExpander::collectFaces(L, b).empty())
@@ -123,12 +123,12 @@ TEST(ConvexDecomposer, OutputBoxesContainFaces) {
 }
 
 // 出力ボックスは root AABB 内に収まる
-TEST(ConvexDecomposer, BoxesWithinRoot) {
+TEST(BoxPartitioner, BoxesWithinRoot) {
     const Mesh L = makeLShapeU();
     const Eigen::AlignedBox3d root = meshAABB(L);
-    ConvexDecomposer::Options opt;
+    BoxPartitioner::Options opt;
     opt.maxConvexPieces = 4;
-    const auto boxes = ConvexDecomposer::partition(L, opt);
+    const auto boxes = BoxPartitioner::partition(L, opt);
     const double eps = 1e-9;
     for (const auto& b : boxes) {
         EXPECT_TRUE((b.min().array() >= root.min().array() - eps).all());
@@ -137,37 +137,37 @@ TEST(ConvexDecomposer, BoxesWithinRoot) {
 }
 
 // maxConvexPieces=1 は分割しない
-TEST(ConvexDecomposer, MaxOnePieceNoSplit) {
+TEST(BoxPartitioner, MaxOnePieceNoSplit) {
     const Mesh L = makeLShapeU();
-    ConvexDecomposer::Options opt;
+    BoxPartitioner::Options opt;
     opt.maxConvexPieces = 1;
-    const auto boxes = ConvexDecomposer::partition(L, opt);
+    const auto boxes = BoxPartitioner::partition(L, opt);
     EXPECT_EQ(boxes.size(), 1u);
 }
 
 // 空メッシュはボックスを返さない
-TEST(ConvexDecomposer, EmptyMeshNoBoxes) {
-    ConvexDecomposer::Options opt;
+TEST(BoxPartitioner, EmptyMeshNoBoxes) {
+    BoxPartitioner::Options opt;
     opt.maxConvexPieces = 8;
-    EXPECT_TRUE(ConvexDecomposer::partition(Mesh{}, opt).empty());
+    EXPECT_TRUE(BoxPartitioner::partition(Mesh{}, opt).empty());
 }
 
 // concavityTol が負でも 0 にクランプされ、結果は tol=0 と一致
-TEST(ConvexDecomposer, NegativeTolClampedToZero) {
+TEST(BoxPartitioner, NegativeTolClampedToZero) {
     const Mesh L = makeLShapeU();
-    ConvexDecomposer::Options a; a.maxConvexPieces = 4; a.concavityTol =  0.0;
-    ConvexDecomposer::Options b; b.maxConvexPieces = 4; b.concavityTol = -5.0;
-    EXPECT_EQ(ConvexDecomposer::partition(L, a).size(),
-              ConvexDecomposer::partition(L, b).size());
+    BoxPartitioner::Options a; a.maxConvexPieces = 4; a.concavityTol =  0.0;
+    BoxPartitioner::Options b; b.maxConvexPieces = 4; b.concavityTol = -5.0;
+    EXPECT_EQ(BoxPartitioner::partition(L, a).size(),
+              BoxPartitioner::partition(L, b).size());
 }
 
 // 巨大な maxConvexPieces でも終了し、面数（=分割可能箇所）で頭打ちになる
-TEST(ConvexDecomposer, HugeMaxPiecesTerminates) {
+TEST(BoxPartitioner, HugeMaxPiecesTerminates) {
     const Mesh L = makeLShapeU();
-    ConvexDecomposer::Options opt;
+    BoxPartitioner::Options opt;
     opt.maxConvexPieces = 100000;
     opt.concavityTol    = 0.0;
-    const auto boxes = ConvexDecomposer::partition(L, opt);
+    const auto boxes = BoxPartitioner::partition(L, opt);
     EXPECT_GE(boxes.size(), 2u);
     EXPECT_LE(boxes.size(), static_cast<std::size_t>(opt.maxConvexPieces));
     for (const auto& b : boxes)

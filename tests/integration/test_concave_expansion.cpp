@@ -1,4 +1,4 @@
-// Integration tests: 凹形状の近似凸分解膨張 (ConvexDecomposer + BoxExpander)
+// Integration tests: 凹形状の膨張（BoxPartitioner + BoxExpander）
 //
 // 検証内容:
 //   1. 保守性 (Cov%=100%): 全入力頂点が、いずれかの凸ピースに距離 d のマージンで包含される
@@ -9,7 +9,7 @@
 
 #include <gtest/gtest.h>
 #include "expander/BoxExpander.hpp"
-#include "expander/ConvexDecomposer.hpp"
+#include "expander/BoxPartitioner.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -93,11 +93,11 @@ static double cUnionVolumeMC(const std::vector<Mesh>& pieces, int samples = 2000
 // 部品を K ピース上限で空間分割し、各ボックスを全メッシュに対し d だけ削り出す
 static std::vector<Mesh> decomposeAndExpand(const Mesh& inp, double d,
                                             int maxPieces, double concavityTol) {
-    ConvexDecomposer::Options dopt;
+    BoxPartitioner::Options dopt;
     dopt.maxConvexPieces = maxPieces;
     dopt.concavityTol    = concavityTol;
     const std::vector<Eigen::AlignedBox3d> boxes =
-        ConvexDecomposer::partition(inp, dopt);
+        BoxPartitioner::partition(inp, dopt);
 
     BoxExpander exp;
     std::vector<Mesh> pieces;

@@ -1,4 +1,4 @@
-#include "expander/ConvexDecomposer.hpp"
+#include "expander/BoxPartitioner.hpp"
 #include "expander/BoxExpander.hpp"
 #include "expander/MathUtils.hpp"
 
@@ -21,7 +21,7 @@ struct RegionEval {
 // ボックス領域の concavity と、分割軸・分割位置を計算する。
 //   box に重なる面を集め、各面 f の法線を最近傍マージ方向 m* に割り当て、
 //   gap_f = max(局所頂点·m*) - max(face頂点·m*) の最大値を concavity とする。
-//   分割は最悪方向 m* に最も沿う軸で、局所面重心の中央値位置で行う。
+//   分割は最悪面（ポケットを定義する面）の位置で、最悪方向に最も沿う軸で行う。
 RegionEval evalRegion(const Mesh&                mesh,
                       const Eigen::AlignedBox3d& box,
                       double                     faceNormalMergeDeg)
@@ -31,39 +31,24 @@ RegionEval evalRegion(const Mesh&                mesh,
     const std::vector<int> faceIdx = BoxExpander::collectFaces(mesh, box);
     if (faceIdx.empty()) return res;
 
-    // 1. 各面の単位法線（縮退面は除外）
-    std::vector<Eigen::Vector3d> normals;
-    std::vector<int>             validFaces;
-    normals.reserve(faceIdx.size());
-    validFaces.reserve(faceIdx.size());
-    for (int fi : faceIdx) {
-        const auto& f = mesh.faces[fi];
-        const Eigen::Vector3d n = math::triangleNormal(
-            mesh.vertices.row(f[0]).transpose(),
-            mesh.vertices.row(f[1]).transpose(),
-            mesh.vertices.row(f[2]).transpose());
-        if (n.squaredNorm() > 0.5) { normals.push_back(n); validFaces.push_back(fi); }
-    }
+    // 1. 各面の単位法線（縮退面は除外）。validFaces は normals と並行。
+    std::vector<int> validFaces;
+    const std::vector<Eigen::Vector3d> normals =
+        BoxExpander::faceNormals(mesh, faceIdx, &validFaces);
     if (normals.empty()) return res;
 
     // 2. 近似平行法線をマージした方向集合
     const auto dirs = math::mergeDirections(normals, faceNormalMergeDeg);
 
     // 3. 各マージ方向の support D_m = max(局所面頂点·m)
-    std::vector<double> D(dirs.size(), -std::numeric_limits<double>::infinity());
-    for (int fi : faceIdx) {
-        const auto& f = mesh.faces[fi];
-        for (int k = 0; k < 3; ++k) {
-            const Eigen::Vector3d v = mesh.vertices.row(f[k]).transpose();
-            for (std::size_t di = 0; di < dirs.size(); ++di)
-                D[di] = std::max(D[di], v.dot(dirs[di]));
-        }
-    }
+    std::vector<double> D(dirs.size());
+    for (std::size_t di = 0; di < dirs.size(); ++di)
+        D[di] = BoxExpander::maxSupport(mesh, faceIdx, dirs[di]);
 
     // 4. 各面のギャップ = 最近傍マージ方向の D - 面 support。最大値が concavity。
     //    最悪の面（ポケットを定義する面）も記録する。
-    Eigen::Vector3d worstDir       = Eigen::Vector3d::UnitX();
-    int             worstFace      = -1;
+    Eigen::Vector3d worstDir  = Eigen::Vector3d::UnitX();
+    int             worstFace = -1;
     for (std::size_t i = 0; i < validFaces.size(); ++i) {
         const Eigen::Vector3d& nf = normals[i];
 
@@ -117,9 +102,9 @@ RegionEval evalRegion(const Mesh&                mesh,
 // ---------------------------------------------------------------------------
 // regionConcavity()
 // ---------------------------------------------------------------------------
-double ConvexDecomposer::regionConcavity(const Mesh&                mesh,
-                                         const Eigen::AlignedBox3d& box,
-                                         double                     faceNormalMergeDeg)
+double BoxPartitioner::regionConcavity(const Mesh&                mesh,
+                                       const Eigen::AlignedBox3d& box,
+                                       double                     faceNormalMergeDeg)
 {
     return evalRegion(mesh, box, faceNormalMergeDeg).concavity;
 }
@@ -127,8 +112,8 @@ double ConvexDecomposer::regionConcavity(const Mesh&                mesh,
 // ---------------------------------------------------------------------------
 // partition()
 // ---------------------------------------------------------------------------
-std::vector<Eigen::AlignedBox3d> ConvexDecomposer::partition(const Mesh&    mesh,
-                                                             const Options& opt)
+std::vector<Eigen::AlignedBox3d> BoxPartitioner::partition(const Mesh&    mesh,
+                                                           const Options& opt)
 {
     std::vector<Eigen::AlignedBox3d> result;
     if (mesh.empty() || mesh.faces.empty()) return result;

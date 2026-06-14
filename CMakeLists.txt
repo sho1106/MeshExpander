@@ -51,7 +51,7 @@ FetchContent_MakeAvailable(googletest)
 add_library(mesh_expander STATIC
     src/BoxExpander.cpp
     src/ClippingEngine.cpp
-    src/ConvexDecomposer.cpp
+    src/BoxPartitioner.cpp
     src/AssemblyExpander.cpp
 )
 target_include_directories(mesh_expander PUBLIC
@@ -130,7 +130,7 @@ add_executable(unit_tests
     tests/unit/test_box_expander.cpp
     tests/unit/test_math_utils.cpp
     tests/unit/test_clipping_engine.cpp
-    tests/unit/test_convex_decomposer.cpp
+    tests/unit/test_box_partitioner.cpp
     tests/unit/test_assembly_expander.cpp
 )
 target_link_libraries(unit_tests PRIVATE

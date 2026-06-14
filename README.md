@@ -341,7 +341,7 @@ MeshExpander/
 │   ├── Mesh.hpp                  頂点 + 面データ構造
 │   ├── MathUtils.hpp             正規化・方向生成・半空間ユーティリティ
 │   ├── ClippingEngine.hpp        半空間クリッピング（BoxExpander 内部）
-│   ├── ConvexDecomposer.hpp      凹対応: concavity 駆動の空間ボックス分割
+│   ├── BoxPartitioner.hpp      凹対応: concavity 駆動の空間ボックス分割
 │   ├── IModelLoader.hpp          ローダーインタフェース
 │   ├── IModelExporter.hpp        エクスポーターインタフェース
 │   ├── StlReader.hpp             バイナリ STL リーダー（ヘッダーオンリー）
@@ -349,7 +349,7 @@ MeshExpander/
 ├── src/
 │   ├── BoxExpander.cpp
 │   ├── ClippingEngine.cpp
-│   ├── ConvexDecomposer.cpp
+│   ├── BoxPartitioner.cpp
 │   └── AssemblyExpander.cpp
 ├── python/
 │   ├── meshexpander_core.cpp     pybind11 バインディング
@@ -384,7 +384,7 @@ cmake --build build --config Release --target check
 | BoxExpander | unit | 保守性・堅牢性・頂点数上限 |
 | MathUtils | unit | 正規化・方向生成・マージ |
 | ClippingEngine | unit | 半空間クリッピング正確性 |
-| ConvexDecomposer | unit | concavity 計算・凸/凹分割・空ボックス除外 |
+| BoxPartitioner | unit | concavity 計算・凸/凹分割・空ボックス除外 |
 | AssemblyExpander | unit | マルチパート展開・mergeContained |
 | ShapeExpansion | integration | 球・円柱・円錐の精度比 |
 | CadShape | integration | トーラス・ギア・星型・中空シリンダー |

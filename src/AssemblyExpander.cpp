@@ -1,7 +1,7 @@
 #include "expander/AssemblyExpander.hpp"
 #include "expander/BoxExpander.hpp"
 #include "expander/ClippingEngine.hpp"
-#include "expander/ConvexDecomposer.hpp"
+#include "expander/BoxPartitioner.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -95,7 +95,7 @@ Mesh AssemblyExpander::expandPart(const Mesh& part, double d) const
     // concavityTol 単独指定（maxConvexPieces 未指定）でも分割できるよう、
     // ピース上限が未設定なら既定上限を与える。
     constexpr int kDefaultMaxPiecesForTol = 64;
-    ConvexDecomposer::Options dopt;
+    BoxPartitioner::Options dopt;
     dopt.concavityTol       = opts_.concavityTol;
     dopt.maxConvexPieces    = (opts_.maxConvexPieces > 1)
                                   ? opts_.maxConvexPieces
@@ -103,7 +103,7 @@ Mesh AssemblyExpander::expandPart(const Mesh& part, double d) const
     dopt.faceNormalMergeDeg = opts_.faceNormalMergeDeg;
 
     const std::vector<Eigen::AlignedBox3d> boxes =
-        ConvexDecomposer::partition(part, dopt);
+        BoxPartitioner::partition(part, dopt);
     if (boxes.size() <= 1)
         return exp.expand(part, d);   // 分割されなかった（凸）→ 単一ピース
 
