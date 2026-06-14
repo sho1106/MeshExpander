@@ -42,6 +42,22 @@ def make_cube_mesh(half: float, offset=(0.0, 0.0, 0.0)) -> me.Mesh:
     return me.Mesh.from_arrays(v, f)
 
 
+def make_lshape_mesh(R: float = 10.0, H: float = 20.0) -> me.Mesh:
+    """Concave L-shaped prism (single reflex corner)."""
+    hz = H * 0.5
+    verts = np.array([
+        [-R, -R,  hz], [R, -R,  hz], [R, 0,  hz], [0, 0,  hz], [0, R,  hz], [-R, R,  hz],
+        [-R, -R, -hz], [R, -R, -hz], [R, 0, -hz], [0, 0, -hz], [0, R, -hz], [-R, R, -hz],
+    ], dtype=np.float64)
+    faces = np.array([
+        [0,1,2],[0,2,3],[0,3,4],[0,4,5],
+        [6,8,7],[6,9,8],[6,10,9],[6,11,10],
+        [0,6,7],[0,7,1],[1,7,8],[1,8,2],[2,8,9],[2,9,3],
+        [3,9,10],[3,10,4],[4,10,11],[4,11,5],[5,11,6],[5,6,0],
+    ], dtype=np.int32)
+    return me.Mesh.from_arrays(verts, faces)
+
+
 # ── Mesh class ────────────────────────────────────────────────────────────────
 
 class TestMesh:
@@ -190,6 +206,22 @@ class TestAssemblyExpander:
         result = exp.expand_merged([cube], d=0.1)
         assert not result.empty()
 
+    def test_concave_knobs_exposed(self):
+        opts = me.AssemblyExpanderOptions()
+        opts.max_convex_pieces = 8
+        opts.concavity_tol = 0.0
+        assert opts.max_convex_pieces == 8
+        assert opts.concavity_tol == 0.0
+
+    def test_concave_decomposition_adds_pieces(self):
+        """maxConvexPieces>1 で L 字が複数ピースに分解され面数が増える。"""
+        L = make_lshape_mesh()
+        single = me.AssemblyExpander().expand([L], d=1.0)[0]
+        opts = me.AssemblyExpanderOptions()
+        opts.max_convex_pieces = 8
+        multi = me.AssemblyExpander(opts).expand([L], d=1.0)[0]
+        assert multi.num_faces() > single.num_faces()
+
     def test_per_part_tighter_than_single_mesh(self):
         """Per-part expansion volume < single-mesh expansion for far-apart parts."""
         d = 0.5
@@ -230,6 +262,12 @@ class TestFreeFunctions:
         result = me.expand_assembly_merged([a, b], d=0.1)
         assert isinstance(result, me.Mesh)
         assert not result.empty()
+
+    def test_expand_assembly_concave_kwargs(self):
+        L = make_lshape_mesh()
+        base = me.expand_assembly([L], d=1.0)[0]
+        multi = me.expand_assembly([L], d=1.0, max_convex_pieces=8)[0]
+        assert multi.num_faces() > base.num_faces()
 
     def test_expand_np(self):
         v, f = make_cube_arrays(2.0)

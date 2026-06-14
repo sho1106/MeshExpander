@@ -63,6 +63,19 @@ inline Eigen::MatrixXd applyDenormalization(const Eigen::MatrixXd& V,
 }
 
 // ---------------------------------------------------------------------------
+// Geometry helpers
+// ---------------------------------------------------------------------------
+
+// Unit normal of triangle (a,b,c), or the zero vector if degenerate.
+inline Eigen::Vector3d triangleNormal(const Eigen::Vector3d& a,
+                                      const Eigen::Vector3d& b,
+                                      const Eigen::Vector3d& c) {
+    const Eigen::Vector3d n = (b - a).cross(c - a);
+    const double len = n.norm();
+    return (len > kEpsilon) ? Eigen::Vector3d(n / len) : Eigen::Vector3d::Zero();
+}
+
+// ---------------------------------------------------------------------------
 // Direction sets
 // ---------------------------------------------------------------------------
 

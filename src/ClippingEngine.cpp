@@ -3,6 +3,9 @@
 #include <Eigen/QR>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <tuple>
+#include <unordered_map>
 
 namespace expander {
 
@@ -110,14 +113,51 @@ std::vector<Eigen::Vector3d> ClippingEngine::computeVertices(
         }
     }
 
-    // Deduplicate: merge vertices closer than kOnPlaneEps
+    // Deduplicate: merge vertices closer than kOnPlaneEps.
+    // Spatial hash with cell size kOnPlaneEps: two points within kOnPlaneEps
+    // differ by at most one cell per axis, so scanning the 3x3x3 neighborhood
+    // finds every potential duplicate in O(candidates) instead of O(n^2).
+    using Cell = std::tuple<std::int64_t, std::int64_t, std::int64_t>;
+    struct CellHash {
+        std::size_t operator()(const Cell& c) const {
+            std::size_t h = std::hash<std::int64_t>{}(std::get<0>(c));
+            h ^= std::hash<std::int64_t>{}(std::get<1>(c)) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= std::hash<std::int64_t>{}(std::get<2>(c)) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
+
     std::vector<Eigen::Vector3d> unique;
     unique.reserve(candidates.size());
+    std::unordered_map<Cell, std::vector<int>, CellHash> grid;
+    grid.reserve(candidates.size() * 2);
+
+    const double inv = 1.0 / kOnPlaneEps;
+    const double eps2 = kOnPlaneEps * kOnPlaneEps;
+    auto cellOf = [&](const Eigen::Vector3d& p) {
+        return Cell{ static_cast<std::int64_t>(std::floor(p.x() * inv)),
+                     static_cast<std::int64_t>(std::floor(p.y() * inv)),
+                     static_cast<std::int64_t>(std::floor(p.z() * inv)) };
+    };
+
     for (const auto& c : candidates) {
+        const Cell base = cellOf(c);
         bool dup = false;
-        for (const auto& u : unique)
-            if ((c - u).squaredNorm() < kOnPlaneEps * kOnPlaneEps) { dup = true; break; }
-        if (!dup) unique.push_back(c);
+        for (int dx = -1; dx <= 1 && !dup; ++dx)
+            for (int dy = -1; dy <= 1 && !dup; ++dy)
+                for (int dz = -1; dz <= 1 && !dup; ++dz) {
+                    const Cell nb{ std::get<0>(base) + dx,
+                                   std::get<1>(base) + dy,
+                                   std::get<2>(base) + dz };
+                    auto it = grid.find(nb);
+                    if (it == grid.end()) continue;
+                    for (int ui : it->second)
+                        if ((c - unique[ui]).squaredNorm() < eps2) { dup = true; break; }
+                }
+        if (!dup) {
+            grid[base].push_back(static_cast<int>(unique.size()));
+            unique.push_back(c);
+        }
     }
     return unique;
 }

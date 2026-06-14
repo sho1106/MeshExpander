@@ -1,6 +1,6 @@
 """Type stubs for meshexpander C++ extension."""
 
-from typing import Sequence
+from typing import Optional
 import numpy as np
 from numpy.typing import NDArray
 
@@ -31,53 +31,35 @@ class Mesh:
     def __repr__(self) -> str: ...
 
 
-class ConservativeExpander:
-    """Conservative expander for convex shapes (face-normal mode)."""
+class BoxExpander:
+    """削り出し法コア機能 (Carving Expansion Core).
 
-    def __init__(self) -> None: ...
-    def expand(self, mesh: Mesh, d: float) -> Mesh:
-        """Expand convex mesh by distance d. Returns single closed polyhedron."""
-        ...
+    Expands a box by d and carves it with local face normals from the mesh
+    faces that overlap the box, producing a single closed convex polytope.
+    """
 
-
-class RobustSlicer:
-    """Conservative expander for concave shapes via solid voxelization."""
-
-    def __init__(
-        self,
-        resolution: int = 64,
-        face_normal_merge_deg: float = 20.0,
-    ) -> None: ...
-
-    @classmethod
-    def with_cell_size(
-        cls,
-        cell_size: float,
-        face_normal_merge_deg: float = 20.0,
-    ) -> "RobustSlicer":
-        """Create slicer with explicit world-space voxel cell size."""
-        ...
+    def __init__(self, face_normal_merge_deg: float = 20.0) -> None: ...
 
     def expand(self, mesh: Mesh, d: float) -> Mesh:
-        """Expand mesh (IExpander compat — returns first polytope)."""
+        """Expand mesh using its own AABB as the initial box."""
         ...
 
-    def expand_multi(self, mesh: Mesh, d: float) -> list[Mesh]:
-        """Expand concave mesh into a list of independent closed polytopes."""
-        ...
-
-    def expand_merged(self, mesh: Mesh, d: float) -> Mesh:
-        """Expand and merge all polytopes into one STL-ready mesh."""
+    def expand_box(self, box, mesh: Mesh, d: float) -> Mesh:
+        """Expand a specific AABB using nearby face normals from mesh."""
         ...
 
 
 class AssemblyExpanderOptions:
     """Options controlling AssemblyExpander behaviour."""
 
-    resolution: int                 # Voxel resolution for concave parts [default: 64]
-    cell_size_world: float          # Fixed voxel cell size (overrides resolution when > 0)
-    face_normal_merge_deg: float    # Angle threshold for merging near-parallel normals
-    convex_tol: float               # Tolerance for isConvex() test
+    face_normal_merge_deg: float
+    """Angle threshold for merging near-parallel face normals (degrees)."""
+    concavity_tol: float
+    """Concave support: split until each region's concavity is below this
+    tolerance (world units). 0 keeps single-convex behaviour (default)."""
+    max_convex_pieces: int
+    """Concave support: upper bound on convex pieces per part. 1 = single
+    convex (default); >1 enables concavity-driven box decomposition."""
 
     def __init__(self) -> None: ...
 
@@ -85,19 +67,21 @@ class AssemblyExpanderOptions:
 class AssemblyExpander:
     """Conservative expansion for multi-part 3D assemblies.
 
-    Each part is expanded independently using the optimal algorithm:
-    - Convex parts  → ConservativeExpander (single polytope, low polygon count)
-    - Concave parts → RobustSlicer         (voxel-based, concavity-aware)
+    By default each part is expanded with BoxExpander (削り出し法) into a single
+    convex polytope. Setting concavity_tol>0 or max_convex_pieces>1 enables
+    concavity-driven box decomposition so concave parts are expanded as a union
+    of convex pieces (fewer wasted volume, still conservative).
 
     Examples
     --------
-    >>> exp = AssemblyExpander()
-    >>> parts = [mesh_a, mesh_b]
-    >>> parts = AssemblyExpander.merge_contained(parts)
+    >>> opts = AssemblyExpanderOptions()
+    >>> opts.max_convex_pieces = 8
+    >>> exp = AssemblyExpander(opts)
+    >>> parts = AssemblyExpander.merge_contained([mesh_a, mesh_b])
     >>> result = exp.expand_merged(parts, d=0.002)
     """
 
-    def __init__(self, options: AssemblyExpanderOptions | None = None) -> None: ...
+    def __init__(self, options: Optional[AssemblyExpanderOptions] = None) -> None: ...
 
     def expand(self, parts: list[Mesh], d: float) -> list[Mesh]:
         """Expand each part independently. Returns one Mesh per input part."""
@@ -113,11 +97,6 @@ class AssemblyExpander:
         tolerance: float = 1e-6,
     ) -> list[Mesh]:
         """Merge parts whose bounding box is fully contained within another part's."""
-        ...
-
-    @staticmethod
-    def is_convex(mesh: Mesh, tol: float = 1e-6) -> bool:
-        """Return True if mesh is approximately convex."""
         ...
 
 
@@ -164,27 +143,21 @@ def write_stl(
 def expand_file(
     input_path: str,
     d: float,
-    cell_size: float = 0.005,
     output_path: str = "",
 ) -> Mesh:
-    """Read STL → expand with RobustSlicer → optionally write → return Mesh."""
+    """Read STL → expand with BoxExpander → optionally write → return Mesh."""
     ...
 
 def expand_np(
     vertices: NDArray[np.float64],
     faces: NDArray[np.int32],
     d: float,
-    cell_size: float = 0.005,
 ) -> tuple[NDArray[np.float64], NDArray[np.int32]]:
     """Expand mesh from numpy arrays. Returns (vertices[N2,3], faces[M2,3])."""
     ...
 
 
 # ── Multi-part assembly convenience ──────────────────────────────────────────
-
-def is_convex(mesh: Mesh, tol: float = 1e-6) -> bool:
-    """Return True if mesh is approximately convex."""
-    ...
 
 def merge_contained(
     parts: list[Mesh],
@@ -196,19 +169,25 @@ def merge_contained(
 def expand_assembly(
     parts: list[Mesh],
     d: float,
-    resolution: int = 64,
-    cell_size_world: float = 0.0,
     face_normal_merge_deg: float = 20.0,
+    concavity_tol: float = 0.0,
+    max_convex_pieces: int = 1,
 ) -> list[Mesh]:
-    """Expand each part independently. Returns list[Mesh]."""
+    """Expand each part independently. Returns list[Mesh].
+
+    Set concavity_tol>0 or max_convex_pieces>1 for concave parts.
+    """
     ...
 
 def expand_assembly_merged(
     parts: list[Mesh],
     d: float,
-    resolution: int = 64,
-    cell_size_world: float = 0.0,
     face_normal_merge_deg: float = 20.0,
+    concavity_tol: float = 0.0,
+    max_convex_pieces: int = 1,
 ) -> Mesh:
-    """Expand all parts and merge into one multi-body Mesh."""
+    """Expand all parts and merge into one multi-body Mesh.
+
+    Set concavity_tol>0 or max_convex_pieces>1 for concave parts.
+    """
     ...

@@ -190,7 +190,15 @@ PYBIND11_MODULE(meshexpander_core, mod) {
         .def(py::init<>())
         .def_readwrite("face_normal_merge_deg",
             &AssemblyExpander::Options::faceNormalMergeDeg,
-            "Angle threshold for merging near-parallel face normals (degrees)");
+            "Angle threshold for merging near-parallel face normals (degrees)")
+        .def_readwrite("concavity_tol",
+            &AssemblyExpander::Options::concavityTol,
+            "Concave support: split a part until each region's concavity is below "
+            "this tolerance (world units). 0 keeps the default single-convex behaviour.")
+        .def_readwrite("max_convex_pieces",
+            &AssemblyExpander::Options::maxConvexPieces,
+            "Concave support: upper bound on convex pieces per part. 1 = single convex "
+            "(default). >1 enables concavity-driven box decomposition.");
 
     py::class_<AssemblyExpander>(mod, "AssemblyExpander", R"pbdoc(
         Conservative expansion for multi-part 3D assemblies.
@@ -229,26 +237,38 @@ PYBIND11_MODULE(meshexpander_core, mod) {
         "Merge parts whose bounding box is fully contained within another part's.");
 
     mod.def("expand_assembly",
-        [](const std::vector<Mesh>& parts, double d, double faceNormalMergeDeg) {
+        [](const std::vector<Mesh>& parts, double d, double faceNormalMergeDeg,
+           double concavityTol, int maxConvexPieces) {
             AssemblyExpander::Options opts;
             opts.faceNormalMergeDeg = faceNormalMergeDeg;
+            opts.concavityTol       = concavityTol;
+            opts.maxConvexPieces    = maxConvexPieces;
             return AssemblyExpander(opts).expand(parts, d);
         },
         py::arg("parts"),
         py::arg("d"),
         py::arg("face_normal_merge_deg") = 20.0,
-        "Expand each part independently. Returns list[Mesh].");
+        py::arg("concavity_tol")         = 0.0,
+        py::arg("max_convex_pieces")     = 1,
+        "Expand each part independently. Returns list[Mesh].\n"
+        "Set concavity_tol>0 or max_convex_pieces>1 for concave parts.");
 
     mod.def("expand_assembly_merged",
-        [](const std::vector<Mesh>& parts, double d, double faceNormalMergeDeg) {
+        [](const std::vector<Mesh>& parts, double d, double faceNormalMergeDeg,
+           double concavityTol, int maxConvexPieces) {
             AssemblyExpander::Options opts;
             opts.faceNormalMergeDeg = faceNormalMergeDeg;
+            opts.concavityTol       = concavityTol;
+            opts.maxConvexPieces    = maxConvexPieces;
             return AssemblyExpander(opts).expandMerged(parts, d);
         },
         py::arg("parts"),
         py::arg("d"),
         py::arg("face_normal_merge_deg") = 20.0,
-        "Expand all parts and merge into one multi-body Mesh.");
+        py::arg("concavity_tol")         = 0.0,
+        py::arg("max_convex_pieces")     = 1,
+        "Expand all parts and merge into one multi-body Mesh.\n"
+        "Set concavity_tol>0 or max_convex_pieces>1 for concave parts.");
 
     // ── Assembly file I/O (requires MESHEXPANDER_HAS_IO / Assimp) ────────────
 #ifdef MESHEXPANDER_HAS_IO

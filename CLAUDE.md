@@ -20,10 +20,19 @@ BoxExpander                   ← 削り出し法コア機能（最重要）
 
 AssemblyExpander              ← マルチパートオーケストレータ
       ファイルのメッシュ構造が部品境界 → 全部品を BoxExpander で膨張
-      Options: { faceNormalMergeDeg = 20.0 }
+      Options: { faceNormalMergeDeg = 20.0,
+                 concavityTol = 0.0,        # >0 で凹分解を有効化
+                 maxConvexPieces = 1 }      # >1 で凹分解を有効化
+      凹対応時: ConvexDecomposer::partition → ボックス毎に expand(box,mesh,d) → mergeMeshes
+
+ConvexDecomposer              ← 凹対応: concavity 駆動の適応的空間ボックス分割
+      concavity(face) = max(局所頂点·n_f) − max(face頂点·n_f) ＝削り出しの過膨張量
+      最悪面のポケット面位置で軸平行二分割 → 面なしボックス(凹ノッチ外)は除外
+      ボクセル不使用・少数ボックス。L字等の凹コーナーで体積削減、
+      チャンネル(凸包=AABB)は改善限定的
 
 ClippingEngine                ← 半空間クリッピング（BoxExpander 内部）
-MathUtils                     ← 正規化・方向生成・half-space ユーティリティ
+MathUtils                     ← 正規化・方向生成・half-space・triangleNormal ユーティリティ
 ```
 
 ## 重要な設計決定
@@ -51,12 +60,14 @@ include/expander/
   BoxExpander.hpp          削り出し法コアAPI（box + mesh → 閉凸多面体）
   AssemblyExpander.hpp     マルチパートオーケストレータ
   ClippingEngine.hpp       半空間クリッピング（BoxExpander 内部）
+  ConvexDecomposer.hpp     凹対応: concavity 駆動の空間ボックス分割
   StlReader.hpp            STL ファイル読み込み
   StlWriter.hpp            STL ファイル出力
 
 src/
   BoxExpander.cpp
   ClippingEngine.cpp
+  ConvexDecomposer.cpp
   AssemblyExpander.cpp
 
 tests/

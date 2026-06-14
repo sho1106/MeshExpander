@@ -30,6 +30,16 @@ public:
     struct Options {
         // Angle threshold for merging near-parallel face normals.
         double faceNormalMergeDeg = 20.0;
+
+        // 凹形状対応（concavity 駆動の空間ボックス分割）のノブ。
+        // デフォルトは単一凸=従来挙動。concavityTol > 0 または maxConvexPieces > 1 で
+        // 分割が有効になり、各部品の AABB をボックスに分割して個別に削り出す。
+        //
+        // concavity がこの許容値（ワールド単位）以下になるまで分割する。
+        // maxConvexPieces 未指定（=1）でも concavityTol>0 なら既定上限まで分割する。
+        double concavityTol    = 0.0;
+        // 1 部品あたりのボックス（凸ピース）数の上限。1 なら分割しない。
+        int    maxConvexPieces = 1;
     };
 
     explicit AssemblyExpander(Options opts = {});
@@ -55,6 +65,9 @@ private:
 
     Mesh expandPart(const Mesh& part, double d) const;
     static Mesh mergeMeshes(const std::vector<Mesh>& meshes);
+
+    // Append src's geometry to dst in place, offsetting face indices.
+    static void appendMesh(Mesh& dst, const Mesh& src);
 };
 
 } // namespace expander

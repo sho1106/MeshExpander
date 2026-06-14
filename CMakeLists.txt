@@ -51,6 +51,7 @@ FetchContent_MakeAvailable(googletest)
 add_library(mesh_expander STATIC
     src/BoxExpander.cpp
     src/ClippingEngine.cpp
+    src/ConvexDecomposer.cpp
     src/AssemblyExpander.cpp
 )
 target_include_directories(mesh_expander PUBLIC
@@ -61,9 +62,9 @@ target_link_libraries(mesh_expander PUBLIC
     Eigen3::Eigen
 )
 if(MSVC)
-    # /utf-8: ソースとリアルアウトをUTF-8として扱う (CP932誤認識を防ぐ)
+    # /utf-8: ソースとリテラルをUTF-8として扱う (CP932誤認識を防ぐ)
     add_compile_options(/utf-8)
-    target_compile_options(mesh_expander PRIVATE /W4)
+    target_compile_options(mesh_expander PRIVATE /utf-8 /W4)
 else()
     target_compile_options(mesh_expander PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -129,6 +130,7 @@ add_executable(unit_tests
     tests/unit/test_box_expander.cpp
     tests/unit/test_math_utils.cpp
     tests/unit/test_clipping_engine.cpp
+    tests/unit/test_convex_decomposer.cpp
     tests/unit/test_assembly_expander.cpp
 )
 target_link_libraries(unit_tests PRIVATE
@@ -142,6 +144,7 @@ add_executable(integration_tests
     tests/integration/test_assembly_expansion.cpp
     tests/integration/test_complex_assembly.cpp
     tests/integration/test_complex_shapes.cpp
+    tests/integration/test_concave_expansion.cpp
 )
 target_link_libraries(integration_tests PRIVATE
     mesh_expander

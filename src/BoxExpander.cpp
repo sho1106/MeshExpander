@@ -57,12 +57,11 @@ Mesh BoxExpander::expand(const Eigen::AlignedBox3d& box,
     normals.reserve(faceIdxs.size());
     for (int fi : faceIdxs) {
         const auto& f  = mesh.faces[fi];
-        const Eigen::Vector3d v0 = mesh.vertices.row(f[0]).transpose();
-        const Eigen::Vector3d v1 = mesh.vertices.row(f[1]).transpose();
-        const Eigen::Vector3d v2 = mesh.vertices.row(f[2]).transpose();
-        const Eigen::Vector3d n  = (v1 - v0).cross(v2 - v0);
-        const double len = n.norm();
-        if (len > math::kEpsilon) normals.push_back(n / len);
+        const Eigen::Vector3d n = math::triangleNormal(
+            mesh.vertices.row(f[0]).transpose(),
+            mesh.vertices.row(f[1]).transpose(),
+            mesh.vertices.row(f[2]).transpose());
+        if (n.squaredNorm() > 0.5) normals.push_back(n);   // skip degenerate (zero) normals
     }
 
     // 4. Merge near-parallel normals

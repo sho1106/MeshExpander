@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "expander/AssemblyExpander.hpp"
+#include "expander/BoxExpander.hpp"
 
 using namespace expander;
 
@@ -126,6 +127,43 @@ TEST(AssemblyExpander, ExpandConcavePart_NonEmpty) {
     auto results = exp.expand({makeLShapeMesh()}, 0.1);
     ASSERT_EQ(results.size(), 1u);
     EXPECT_GT(results[0].numFaces(), 0);
+}
+
+// 凹分解ブランチ end-to-end: Options で分解を有効化すると AssemblyExpander 経由で
+// 複数ボックスが削り出され mergeMeshes で連結される（単一凸より面数が増える）。
+TEST(AssemblyExpander, ExpandConcavePart_DecompositionBranch) {
+    const Mesh L = makeLShapeMesh();
+
+    // 既定（単一凸）の面数
+    const int singleFaces = BoxExpander().expand(L, 0.1).numFaces();
+
+    AssemblyExpander::Options o;
+    o.maxConvexPieces = 8;
+    AssemblyExpander exp(o);
+    auto results = exp.expand({L}, 0.1);
+
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_TRUE(results[0].vertices.allFinite());
+    EXPECT_GT(results[0].numFaces(), singleFaces)
+        << "分解ブランチが走り複数ピースが連結されるはず";
+}
+
+// 後方互換: 既定 Options は単一凸（BoxExpander 直呼びと同じ面数）。
+TEST(AssemblyExpander, DefaultOptionsMatchSingleConvex) {
+    const Mesh L = makeLShapeMesh();
+    const int singleFaces = BoxExpander().expand(L, 0.1).numFaces();
+    AssemblyExpander exp;   // default options
+    EXPECT_EQ(exp.expand({L}, 0.1)[0].numFaces(), singleFaces);
+}
+
+// concavityTol 単独指定（maxConvexPieces 未指定）でも分割が走る。
+TEST(AssemblyExpander, ConcavityTolAloneTriggersSplit) {
+    const Mesh L = makeLShapeMesh();
+    const int singleFaces = BoxExpander().expand(L, 0.1).numFaces();
+    AssemblyExpander::Options o;
+    o.concavityTol = 0.1;   // maxConvexPieces は既定の 1 のまま
+    AssemblyExpander exp(o);
+    EXPECT_GT(exp.expand({L}, 0.1)[0].numFaces(), singleFaces);
 }
 
 TEST(AssemblyExpander, ExpandMultiPart_CountPreserved) {

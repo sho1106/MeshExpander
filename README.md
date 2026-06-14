@@ -166,6 +166,22 @@ v · n_i  ≤  max(V · n_i)  =  D_i - d  <  D_i
 
 *Cov% = 入力頂点の包含率。Exp% = 面法線方向 d 先プローブの包含率。*
 
+### 凹形状（近似凸分解, d = 1 mm）
+
+`maxConvexPieces` / `concavityTol` を指定すると、部品を **concavity 駆動で空間ボックス分割**し、
+各ボックスを削り出して和をとる。凹みを埋めずに膨張でき、ポリゴン数はピース数に概ね比例する。
+
+| 形状 | ピース数 K | 体積比 | 出力面数 |
+|---|---|---|---|
+| L 字プリズム | 1（=単一凸） | 1.775 | 12 |
+| L 字プリズム | 4 | 1.591 | 48 |
+| L 字プリズム | 8 | 1.418 | 96 |
+
+*K を増やすほど凹みの埋め（無駄な体積）が減り、出力面数は K に比例する。全 K で Cov% = 100%。*
+
+> **適用範囲**: 凹コーナー・段差形状で有効。チャンネル（溝）のように凸包が AABB に一致する形状は、
+> 軸平行ボックスの膨張和では削り出せないため改善が限定的（この場合は単一凸と同等になる）。
+
 ---
 
 ## インストール
@@ -225,6 +241,20 @@ expander::Mesh merged = expander.expandMerged(parts, 0.002);
 expander::StlWriter::write("assembly_expanded.stl", merged);
 ```
 
+### C++ — 凹形状の膨張（近似凸分解）
+
+```cpp
+#include "expander/AssemblyExpander.hpp"
+
+// 既定は単一凸（従来挙動）。凹対応はオプションで有効化する。
+expander::AssemblyExpander::Options opts;
+opts.maxConvexPieces = 8;     // 1 部品あたり最大 8 凸ピースまで分割
+opts.concavityTol    = 0.0;   // concavity がこの許容値以下になるまで分割
+
+expander::AssemblyExpander expander(opts);
+std::vector<expander::Mesh> models = expander.expand(parts, 0.002);
+```
+
 ### C++ — 単一メッシュの膨張
 
 ```cpp
@@ -247,6 +277,9 @@ import meshexpander as me
 parts  = me.load_assembly("assembly.stp")
 exp    = me.AssemblyExpander()
 models = exp.expand(parts, d=0.002)
+
+# 凹形状: 近似凸分解で部品ごとに展開（凹みを埋めない）
+models = me.expand_assembly(parts, d=0.002, max_convex_pieces=8)
 
 # 単一 STL ファイル
 me.expand_file("part.stl", d=0.002, output_path="expanded.stl")
@@ -308,6 +341,7 @@ MeshExpander/
 │   ├── Mesh.hpp                  頂点 + 面データ構造
 │   ├── MathUtils.hpp             正規化・方向生成・半空間ユーティリティ
 │   ├── ClippingEngine.hpp        半空間クリッピング（BoxExpander 内部）
+│   ├── ConvexDecomposer.hpp      凹対応: concavity 駆動の空間ボックス分割
 │   ├── IModelLoader.hpp          ローダーインタフェース
 │   ├── IModelExporter.hpp        エクスポーターインタフェース
 │   ├── StlReader.hpp             バイナリ STL リーダー（ヘッダーオンリー）
@@ -315,8 +349,7 @@ MeshExpander/
 ├── src/
 │   ├── BoxExpander.cpp
 │   ├── ClippingEngine.cpp
-│   ├── VoxelGrid.cpp
-│   ├── RobustSlicer.cpp
+│   ├── ConvexDecomposer.cpp
 │   └── AssemblyExpander.cpp
 ├── python/
 │   ├── meshexpander_core.cpp     pybind11 バインディング
@@ -346,20 +379,20 @@ cmake --build build --config Release --target check
 ./build/Release/integration_tests
 ```
 
-| スイート | テスト数 | 検証内容 |
+| スイート | 区分 | 検証内容 |
 |---|---|---|
-| BoxExpander | 7 | 保守性・堅牢性・頂点数上限 |
-| MathUtils | 10 | 正規化・方向生成・マージ |
-| ClippingEngine | 7 | 半空間クリッピング正確性 |
-| VoxelGrid | 7 | ボクセル化・グリーディマージ |
-| RobustSlicer | 7 | 凹形状展開・保守性 |
-| AssemblyExpander (unit) | 15 | マルチパート展開・mergeContained |
-| ShapeExpansion | 4 | 球・円柱・円錐の精度比 |
-| ConcaveExpansion | 4 | L字・C字の保守性 + 体積比較 |
-| CadShape | 5 | トーラス・ギア・星型・中空シリンダー |
-| AssemblyExpansion | 5 | マルチパート Cov%=100%・部品別 vs 統合体積 |
-| ComplexAssembly | 8 | 5 パーツ設備アセンブリ |
-| AssimpIO | 5 | AssimpLoader / AssimpExporter ラウンドトリップ |
+| BoxExpander | unit | 保守性・堅牢性・頂点数上限 |
+| MathUtils | unit | 正規化・方向生成・マージ |
+| ClippingEngine | unit | 半空間クリッピング正確性 |
+| ConvexDecomposer | unit | concavity 計算・凸/凹分割・空ボックス除外 |
+| AssemblyExpander | unit | マルチパート展開・mergeContained |
+| ShapeExpansion | integration | 球・円柱・円錐の精度比 |
+| CadShape | integration | トーラス・ギア・星型・中空シリンダー |
+| ComplexShape | integration | BumpySphere・GroovedCylinder の VolRatio |
+| ConcaveExpansion | integration | L字・C字の Cov%=100% + 分解による体積削減・ノブ単調性 |
+| AssemblyExpansion | integration | マルチパート Cov%=100%・部品別 vs 統合体積 |
+| ComplexAssembly | integration | 5 パーツ設備アセンブリ |
+| AssimpIO | io | AssimpLoader / AssimpExporter ラウンドトリップ |
 
 ---
 
