@@ -27,6 +27,8 @@ wheel.packages = ["python/meshexpander"]
 
 [tool.scikit-build.cmake.define]
 MESHEXPANDER_BUILD_PYTHON = "ON"
+# Keep the wheel to just the Python module — no static lib / headers / CMake config.
+MESHEXPANDER_INSTALL = "OFF"
 
 [tool.cibuildwheel]
 build = "cp38-* cp39-* cp310-* cp311-* cp312-*"

@@ -29,7 +29,9 @@ jobs:
       shell: bash
       run: |
         if [ "${{ runner.os }}" = "Windows" ]; then
-          cmake -S . -B build -G "Visual Studio 17 2022" -DCMAKE_BUILD_TYPE=Release
+          # Let CMake auto-detect the installed Visual Studio generator
+          # (the runner image's VS version changes over time).
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
         else
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
         fi
@@ -66,7 +68,7 @@ jobs:
 
     - name: Build and install package
       shell: bash
-      run: pip install -e . --no-build-isolation -v
+      run: pip install . -v
 
     - name: Install test dependencies
       run: pip install pytest numpy

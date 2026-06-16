@@ -4,6 +4,7 @@
 #include "expander/BoxPartitioner.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <numeric>
 

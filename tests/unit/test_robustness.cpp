@@ -7,7 +7,9 @@
 #include "expander/ClippingEngine.hpp"
 #include "expander/MathUtils.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using namespace expander;

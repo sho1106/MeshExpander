@@ -45,7 +45,7 @@ public:
         int    maxConvexPieces = 1;
     };
 
-    explicit AssemblyExpander(Options opts = {});
+    explicit AssemblyExpander(Options opts = Options());
 
     // Expand each part independently via BoxExpander (削り出し法).
     // Returns one expanded Mesh per input part (index-aligned).
