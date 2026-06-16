@@ -63,6 +63,10 @@ else()
     target_compile_options(mesh_expander PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Position-independent code so the static core can be linked into the pybind11
+# shared module on Linux (otherwise: "ld: final link failed: bad value").
+set_target_properties(mesh_expander PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # ---------- Install / export (find_package(MeshExpander)) ----------
 option(MESHEXPANDER_INSTALL "Generate install rules and a CMake package config" ON)
 if(MESHEXPANDER_INSTALL)
