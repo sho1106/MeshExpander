@@ -259,11 +259,18 @@ if(MESHEXPANDER_BUILD_PYTHON)
         target_compile_definitions(meshexpander_core PRIVATE MESHEXPANDER_HAS_IO)
     endif()
 
-    # Copy built module into python/meshexpander/ for in-tree development
-    add_custom_command(TARGET meshexpander_core POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:meshexpander_core>
-            ${CMAKE_CURRENT_SOURCE_DIR}/python/meshexpander/
-        COMMENT "Copying meshexpander_core to python/meshexpander/"
-    )
+    if(SKBUILD)
+        # Building a wheel: install the extension into the meshexpander package
+        # (the pure-Python files come from [tool.scikit-build] wheel.packages).
+        install(TARGETS meshexpander_core DESTINATION meshexpander)
+    else()
+        # Local in-tree development: copy the module next to __init__.py so
+        # `PYTHONPATH=python` imports work without installing.
+        add_custom_command(TARGET meshexpander_core POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:meshexpander_core>
+                ${CMAKE_CURRENT_SOURCE_DIR}/python/meshexpander/
+            COMMENT "Copying meshexpander_core to python/meshexpander/"
+        )
+    endif()
 endif()

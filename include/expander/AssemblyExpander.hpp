@@ -45,7 +45,12 @@ public:
         int    maxConvexPieces = 1;
     };
 
-    explicit AssemblyExpander(Options opts = Options());
+    // Two constructors instead of a defaulted argument: using Options' default
+    // member initializers in an in-class default argument is rejected by GCC
+    // ("default member initializer required before the end of its enclosing
+    // class"); defining the default ctor out-of-line avoids that.
+    AssemblyExpander();
+    explicit AssemblyExpander(Options opts);
 
     // Expand each part independently via BoxExpander (削り出し法).
     // Returns one expanded Mesh per input part (index-aligned).

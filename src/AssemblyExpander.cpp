@@ -10,6 +10,10 @@
 
 namespace expander {
 
+AssemblyExpander::AssemblyExpander()
+    : opts_(Options{})
+{}
+
 AssemblyExpander::AssemblyExpander(Options opts)
     : opts_(opts)
 {}
