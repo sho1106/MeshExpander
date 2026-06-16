@@ -2,22 +2,37 @@
 
 ## プロジェクト概要
 
-C++17 による保守的 3D メッシュ膨張ライブラリ。入力メッシュを距離 d だけ確実に包摂する凸多面体を生成する。
+C++17 による保守的 3D メッシュ膨張ライブラリ。主用途は削り出し加工モデルの膨張モデル生成。
+マルチパートファイル（STEP/OBJ/FBX）から読み込んだ部品ごとに膨張モデルを生成する。
 
 ## アーキテクチャ
 
 ```
-ConservativeExpander          ← 凸形状向け（唯一のエントリポイント）
+BoxExpander                   ← 削り出し法コア機能（最重要）
   │
-  ├── 面データあり → 面法線モード（形状適応・精度高）
-  │     入力面の法線を収集 → 20°でマージ → 半空間交差 → 単一閉多面体
+  ├── expand(box, mesh, d):   コアAPI
+  │     expandedBox = box ± d
+  │     collectFaces(mesh, box) → 面法線収集 → 20°マージ
+  │     D_i = max(local_vertices · n_i) + d
+  │     ClippingEngine::clip(expandedBox, hs) → 単一閉凸多面体
   │
-  └── 面データなし → 26方向フォールバック（旧来互換）
-        26固定方向 → 半空間交差 → 単一閉多面体
+  └── expand(mesh, d):        コンビニエンスAPI（mesh の AABB をボックスとして使用）
 
-VoxelGrid                     ← ボクセル化 + グリーディマージ（凹形状サポート用）
-ClippingEngine                ← 半空間クリッピング（box + half-spaces）
-MathUtils                     ← 正規化・方向生成・half-space ユーティリティ
+AssemblyExpander              ← マルチパートオーケストレータ
+      ファイルのメッシュ構造が部品境界 → 全部品を BoxExpander で膨張
+      Options: { faceNormalMergeDeg = 20.0,
+                 concavityTol = 0.0,        # >0 で凹分解を有効化
+                 maxConvexPieces = 1 }      # >1 で凹分解を有効化
+      凹対応時: BoxPartitioner::partition → ボックス毎に expand(box,mesh,d) → mergeMeshes
+
+BoxPartitioner              ← 凹対応: concavity 駆動の適応的空間ボックス分割
+      concavity(face) = max(局所頂点·n_f) − max(face頂点·n_f) ＝削り出しの過膨張量
+      最悪面のポケット面位置で軸平行二分割 → 面なしボックス(凹ノッチ外)は除外
+      ボクセル不使用・少数ボックス。L字等の凹コーナーで体積削減、
+      チャンネル(凸包=AABB)は改善限定的
+
+ClippingEngine                ← 半空間クリッピング（BoxExpander 内部）
+MathUtils                     ← 正規化・方向生成・half-space・triangleNormal ユーティリティ
 ```
 
 ## 重要な設計決定
@@ -33,7 +48,7 @@ MathUtils                     ← 正規化・方向生成・half-space ユー�
 
 ### ボリューム計算の正確性
 - 発散定理は単一閉多面体のみ有効。複数 mesh の連結は隣接面がキャンセル
-- ConservativeExpander は expand() 1 回につき必ず単一多面体を返す
+- BoxExpander は expand() 1 回につき必ず単一多面体を返す
 
 ## ファイル構成
 
@@ -42,94 +57,61 @@ include/expander/
   IExpander.hpp            基底インタフェース
   Mesh.hpp                 頂点+面データ構造
   MathUtils.hpp            正規化・方向・半空間ユーティリティ
-  ConservativeExpander.hpp 唯一の公開エキスパンダ
-  ClippingEngine.hpp       半空間クリッピング (VoxelGrid 用)
-  VoxelGrid.hpp            ボクセル化 + グリーディマージ
+  BoxExpander.hpp          削り出し法コアAPI（box + mesh → 閉凸多面体）
+  AssemblyExpander.hpp     マルチパートオーケストレータ
+  ClippingEngine.hpp       半空間クリッピング（BoxExpander 内部）
+  BoxPartitioner.hpp     凹対応: concavity 駆動の空間ボックス分割
+  StlReader.hpp            STL ファイル読み込み
   StlWriter.hpp            STL ファイル出力
 
 src/
-  ConservativeExpander.cpp
+  BoxExpander.cpp
   ClippingEngine.cpp
-  VoxelGrid.cpp
+  BoxPartitioner.cpp
+  AssemblyExpander.cpp
 
 tests/
-  unit/                    33 テスト（ConservativeExpander/MathUtils/ClippingEngine/VoxelGrid）
-  integration/             4 テスト（球・円柱・円錐の精度 + NaN 堅牢性）
+  unit/                    ユニットテスト（BoxExpander/MathUtils/ClippingEngine/AssemblyExpander）
+  integration/             統合テスト（CAD 形状・アセンブリ）
+
+python/
+  meshexpander_core.cpp    pybind11 バインディング
+  meshexpander/
+    __init__.py            パブリック API
+    meshexpander.pyi       型スタブ（IDE 補完・mypy 用）
 ```
 
 ## ビルド・テストコマンド
 
 ```bash
-# 初回セットアップ
-cmake -S projects/MeshExpander -B projects/MeshExpander/build
+# 初回セットアップ（ワークスペースルートから）
+cmake -S projects/MeshExpander -B projects/MeshExpander/build -DCMAKE_BUILD_TYPE=Release
 
 # ビルド + 全テスト
-cmake --build projects/MeshExpander/build --config Release --target check
+cmake --build projects/MeshExpander/build --config Release --target check --parallel 8
 
-# 統合テストのみ（ratio 出力あり）
-./projects/MeshExpander/build/Release/integration_tests
+# ユニットテストのみ
+projects/MeshExpander/build/Release/unit_tests.exe
+
+# 統合テスト（ratio 出力あり）
+projects/MeshExpander/build/Release/integration_tests.exe
+
+# Python バインディングビルド（miniforge）
+cmake -S projects/MeshExpander -B projects/MeshExpander/build_py -DCMAKE_BUILD_TYPE=Release -DMESHEXPANDER_BUILD_PYTHON=ON -DPython3_EXECUTABLE="C:/ProgramData/miniforge3/python.exe"
+cmake --build projects/MeshExpander/build_py --config Release --target meshexpander_core --parallel 8
 ```
 
-## 現在の精度（face-normal モード、d=1.0mm）
+## 現在の精度（BoxExpander、face-normal モード、d=1.0mm）
 
-| 形状 | ratio | over% |
+| 形状 | Cov% | Exp% |
 |---|---|---|
-| 球 (R=10-100) | 1.033 | +3.3% |
-| 円柱 | 1.012 | +1.2% |
-| 円錐 (H=3R) | 1.013 | +1.3% |
-
-## 次のステップ: 凹形状サポート（RobustSlicer）
-
-### 設計仕様
-
-```
-入力: 凹形状メッシュ（Stanford Bunny 等）
-  │
-  ▼
-1. VoxelGrid::build()      保守的三角形-AABB ラスタライズ
-     voxel_size = aabb.maxDim() / resolution (resolution=64 推奨)
-     triangle_aabb 交差判定で塗り
-  │
-  ▼
-2. VoxelGrid::greedyMerge() 凹形状の空隙を保持した直方体集合へ統合
-     優先度: 大きい直方体から。空き格子セルのみ使用
-  │
-  ▼
-3. Per-Box Local Expansion  各直方体に対し:
-     a. 直方体内のメッシュ三角形を選択（重複 OK）
-     b. 選択三角形の面法線でクリッピング（ClippingEngine::clip）
-     c. Safety Margin 強制加算（kSafetyMargin >= 1e-5）
-     d. Post-Inclusion Check: 全入力頂点が何らかの直方体に含まれていることを確認
-  │
-  ▼
-4. 出力: std::vector<Mesh>  独立閉多面体のリスト
-         体積 = 個別体積の和（相互に重複可）
-```
-
-### 実装予定クラス
-
-```cpp
-class RobustSlicer : public IExpander {
-public:
-    explicit RobustSlicer(int resolution = 64, double safetyMargin = 1e-4);
-    // IExpander は単一 Mesh を返すが、凹形状では vector<Mesh> が適切
-    // → expandMulti() を追加するか IExpander を拡張
-    Mesh expand(const Mesh& input, double d) override;  // 互換用: 最初のボックスのみ
-    std::vector<Mesh> expandMulti(const Mesh& input, double d);
-private:
-    int resolution_;
-    double safetyMargin_;
-};
-```
-
-### 注意点
-- VoxelGrid はすでに実装済み（greedyMerge まで）
-- ClippingEngine も実装済み
-- 未実装: Per-Box Local Expansion の三角形選択 + Post-Inclusion Check
-- 三角形選択: AABB 拡張後のボックスと三角形の intersection test (SAT)
+| Torus | 100% | 100% |
+| Gear 12-tooth | 100% | 100% |
+| Star prism 5pt | 100% | 100% |
+| Hollow cylinder | 100% | 100% |
 
 ## テスト拡充方針
 
-- RobustSlicer 向け: 凹み L字形、中空球、Stanford Bunny 等
-- 精度指標: sum(individual volumes) / ideal_volume
-- 保守性確認: 全入力頂点が union of output boxes に含まれること
+- 精度指標: Cov% = 全入力頂点が出力多面体に包含される割合
+- 膨張保証: Exp% = 面法線方向 d 先プローブが出力に包含される割合
+- 新形状追加時は `tests/integration/` に追加し `CMakeLists.txt` へ登録

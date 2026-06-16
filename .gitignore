@@ -33,6 +33,9 @@ stl_output/
 *.ilk
 *.exp
 
+# Python extension modules (built artifacts — built via CMake/pip, not committed)
+*.pyd
+
 # Stanford Bunny source archive (large file)
 bunny.tar.gz
 bunny/
@@ -58,6 +61,12 @@ __pycache__/
 
 # Python binding build directories
 build_py*/
+
+# IO-layer build directory (Assimp)
+build_io/
+
+# Local install-tree used for find_package smoke tests
+_install_test/
 
 # Internal dev-only helper scripts (not for end users)
 scripts/write_voxelgrid.py

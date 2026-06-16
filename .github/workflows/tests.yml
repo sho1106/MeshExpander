@@ -7,49 +7,71 @@ on:
     branches: [ main, develop ]
 
 jobs:
-  test:
+  # ── C++ core tests ──────────────────────────────────────────────────────────
+  cpp:
+    name: C++ (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ ubuntu-latest, windows-latest ]
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Install dependencies (Ubuntu)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake build-essential
-    
-    - name: Install dependencies (Windows)
-      if: runner.os == 'Windows'
-      run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y
-    
-    - name: Create build directory
-      run: mkdir -p build
+        sudo apt-get install -y cmake build-essential ninja-build
+
+    - name: Configure
       shell: bash
-    
-    - name: Configure project (Ubuntu)
+      run: |
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          # Let CMake auto-detect the installed Visual Studio generator
+          # (the runner image's VS version changes over time).
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        else
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        fi
+
+    - name: Build
+      run: cmake --build build --config Release --parallel 4
+
+    - name: Test
+      shell: bash
+      run: ctest --test-dir build --output-on-failure --build-config Release -j4
+
+  # ── Python binding tests ─────────────────────────────────────────────────────
+  python:
+    name: Python ${{ matrix.python }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+        python: [ "3.10", "3.12" ]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python }}
+
+    - name: Install build tools (Ubuntu)
       if: runner.os == 'Linux'
-      run: cd build && cmake ..
-    
-    - name: Configure project (Windows)
-      if: runner.os == 'Windows'
-      run: cd build && cmake .. -G "Visual Studio 17 2022"
-    
-    - name: Build project (Ubuntu)
-      if: runner.os == 'Linux'
-      run: cd build && cmake --build .
-    
-    - name: Build project (Windows)
-      if: runner.os == 'Windows'
-      run: cd build && cmake --build . --config Release
-    
-    - name: Run tests (Ubuntu)
-      if: runner.os == 'Linux'
-      run: cd build && ctest --output-on-failure
-    
-    - name: Run tests (Windows)
-      if: runner.os == 'Windows'
-      run: cd build && ctest --output-on-failure -C Release
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential ninja-build
+
+    - name: Build and install package
+      shell: bash
+      run: pip install . -v
+
+    - name: Install test dependencies
+      run: pip install pytest numpy
+
+    - name: Run Python tests
+      run: pytest tests/python/ -v --tb=short

@@ -6,13 +6,13 @@
 //   ratio         : actual / ideal  (1.0 = 完璧, 大きいほど無駄が多い)
 //   over%         : (ratio - 1) * 100
 //
-// アルゴリズム: 面法線ベース半空間交差 (ConservativeExpander, face-normal mode)
-//   入力メッシュの面法線を収集し、20度閾値でマージ → 各法線方向の半空間を交差。
-//   26固定方向と異なり形状に適応的。apex dominance なし。
-//   球 ≈ +3%, 円柱 ≈ +1%, 円錐 ≈ +3%
+// アルゴリズム: 削り出し法 (BoxExpander)
+//   入力メッシュの AABB を初期ボックスとして使用し、面法線で削り出す。
+//   面法線を収集し、20度閾値でマージ → 各法線方向の半空間を交差。
+//   形状に適応的。球 ≈ +3%, 円柱 ≈ +1%, 円錐 ≈ +3%
 
 #include <gtest/gtest.h>
-#include "expander/ConservativeExpander.hpp"
+#include "expander/BoxExpander.hpp"
 #include "expander/MathUtils.hpp"
 #include "expander/StlWriter.hpp"
 
@@ -169,7 +169,7 @@ static EvalResult evalExpansion(const std::string& label,
                                  double             d,
                                  double             ideal)
 {
-    ConservativeExpander expander;
+    BoxExpander expander;
     Mesh result = expander.expand(input, d);
 
     double actual = (result.numFaces() > 0) ? meshVolume(result) : 0.0;
@@ -285,7 +285,7 @@ TEST(ShapeExpansion, SharpCone) {
 // ---------------------------------------------------------------------------
 TEST(ShapeExpansion, ExtremeShapesNoNaN) {
     const double d = 1.0;
-    ConservativeExpander expander;
+    BoxExpander expander;
 
     Mesh thinCyl = makeCylinder(1.0, 50.0, 64);
     Mesh r1 = expander.expand(thinCyl, d);

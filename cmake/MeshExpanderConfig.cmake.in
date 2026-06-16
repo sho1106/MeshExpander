@@ -1,0 +1,16 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Eigen3 3.4)
+
+include("${CMAKE_CURRENT_LIST_DIR}/MeshExpanderTargets.cmake")
+
+# Eigen is linked as a BUILD_INTERFACE-only dependency on the exported target
+# (so the install/export does not depend on how Eigen was obtained at build
+# time). Re-attach it here as a usage requirement for consumers.
+if(TARGET Eigen3::Eigen AND TARGET MeshExpander::mesh_expander)
+    set_property(TARGET MeshExpander::mesh_expander
+                 APPEND PROPERTY INTERFACE_LINK_LIBRARIES Eigen3::Eigen)
+endif()
+
+check_required_components(MeshExpander)

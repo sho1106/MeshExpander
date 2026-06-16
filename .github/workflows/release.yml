@@ -76,6 +76,26 @@ jobs:
           name: native-${{ matrix.os }}
           path: meshexpander-${{ matrix.os }}.zip
 
+  # ── Publish to PyPI ───────────────────────────────────────────────────────
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build-wheels]
+    runs-on: ubuntu-latest
+    # Requires: Settings → Secrets → PYPI_API_TOKEN
+    # Create token at: https://pypi.org/manage/account/token/
+    if: ${{ secrets.PYPI_API_TOKEN != '' }}
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
   # ── Create GitHub Release ─────────────────────────────────────────────────
   create-release:
     name: Create Release

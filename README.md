@@ -1,179 +1,245 @@
 # MeshExpander
 
+[![CI](https://github.com/sho1106/MeshExpander/actions/workflows/tests.yml/badge.svg)](https://github.com/sho1106/MeshExpander/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
 [![CMake](https://img.shields.io/badge/CMake-3.16%2B-green.svg)](https://cmake.org/)
-[![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen.svg)](#tests)
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](#python-bindings)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](#installation)
 
-![MeshExpander demo animation](docs/images/demo.gif)
+**English** | [日本語](docs/README_JA.md)
 
-**High-performance, concave-aware 3D mesh expansion library with strict conservative guarantees.**
+**A C++17 library that generates per-part machining-clearance models from CAD assemblies.**
 
-Given a 3D mesh and an offset distance `d`, MeshExpander produces an output mesh (or set of meshes) that is guaranteed to fully enclose the original shape at distance `d` in every direction — no surface point is ever left uncovered.
+It reads a multi-part CAD file (STEP / OBJ / FBX), and for each part mesh produces a conservatively *expanded* polytope grown outward by a distance `d` — a clearance model for CNC / EDM toolpaths, interference checking, and fixture design. The expansion distance `d` is **algorithmically guaranteed**: no vertex, edge, or face of the input is ever left uncovered.
 
-**C++ API:**
-```cpp
-#include "expander/RobustSlicer.hpp"
+> **For:** CNC / EDM toolpath & fixture engineers who need a *provably conservative* clearance shell — and developers who want a lightweight, embeddable mesh-expansion primitive.
 
-expander::Mesh input = expander::StlReader::read("part.stl");
+![Carving method: input mesh → face normals → half-spaces → expanded model](docs/images/carving.gif)
 
-// Expand by 2 mm using 5 mm voxel cells — works on any concave shape
-auto slicer = expander::RobustSlicer::withCellSize(0.005);
-expander::Mesh expanded = slicer.expandMerged(input, 0.002);
+*① input mesh → ② face-normal extraction → ③ half-space generation (Dᵢ = max(V·nᵢ) + d) → ④ carved expanded model*
 
-expander::StlWriter::write("expanded.stl", expanded);
+---
+
+## Table of Contents
+
+- [Use case](#use-case)
+- [When to use / when NOT to use](#when-to-use--when-not-to-use)
+- [Quick Start](#quick-start)
+- [The carving method](#the-carving-method)
+- [Benchmarks](#benchmarks)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Visualization](#visualization)
+- [Project layout](#project-layout)
+- [Tests](#tests)
+- [Design principles](#design-principles)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Use case
+
+CNC and EDM machining need a **clearance model** — the original shape inflated by `d` into a closed polytope — for toolpath computation, interference checking, and fixture design.
+
+```
+CAD assembly file (STEP / OBJ / FBX)
+  │
+  ├─ Part A ─→ expanded model A  (distance d guaranteed)
+  ├─ Part B ─→ expanded model B  (distance d guaranteed)
+  └─ Part C ─→ expanded model C  (distance d guaranteed)
 ```
 
-**Python API:**
+**Part boundaries come from the file's mesh structure.** The part units modeled by the CAD tool (solid bodies, scene nodes) are used directly as expansion units.
+
+> **Units.** MeshExpander is unit-agnostic — coordinates and `d` are in your model's own units. Each part is normalized internally before clipping, so results are robust across scales (verified from micrometers to kilometers); just keep `d` in the same units as the geometry.
+
+---
+
+## When to use / when NOT to use
+
+MeshExpander produces a **conservative outer shell** that contains the original shape. It is **not** a true minimal (Minkowski) offset.
+
+| ✅ Good fit | ❌ Poor fit |
+|---|---|
+| Interference checks, fixture/clamp envelopes | Accurate clearance *inside* pockets, holes, slots (concave features get filled) |
+| Guaranteed stock-block (billet) sizing | Faithful offset of organic / freeform surfaces |
+| Anything needing a "never smaller than the part" guarantee | Through-slots / keyways where convex hull = AABB (decomposition barely helps) |
+| A lightweight, low-poly closed polytope from a dense mesh | Shrinking / negative offset |
+
+### Why not OpenVDB / CGAL?
+
+| Tool | Strength | Weakness for this job |
+|---|---|---|
+| **MeshExpander** | Analytic containment guarantee (zero shrink), low-poly (input-density-independent), Eigen-only, MIT, pip-installable | Over-expands / convex-ish; weak on grooves & channels |
+| **OpenVDB** | True offset of arbitrary concave topology; robust | Resolution-dependent, *no* analytic guarantee; high-poly output; heavy deps (TBB, etc.) |
+| **CGAL** (Minkowski) | Exact offset | O(n³m³) — slow on large CAD; GPL/GMP build & license burden |
+| **trimesh / Open3D** | I/O, SDF queries | No built-in mesh-offset operation |
+
+In short, MeshExpander's wedge is **"a guaranteed, low-poly, lightweight clearance shell for machining."** If you need a true offset or faithful concave following, use OpenVDB.
+
+---
+
+## Quick Start
+
+The shortest path that works straight after `pip install` — no extra deps, no build. Try it with the bundled binary-STL sample.
+(The relative path `examples/data/cube.stl` below assumes you run from the **root of the cloned repo**; use an absolute path otherwise.)
+
+### Python — single STL (start here)
+
 ```python
 import meshexpander as me
-import numpy as np
 
-# One-call STL expansion
-result = me.expand_file("model.stl", d=0.002, cell_size=0.005, output_path="expanded.stl")
+# Expand the bundled sample (examples/data/cube.stl, binary STL) by 1mm
+result = me.expand_file("examples/data/cube.stl", d=1.0, output_path="expanded.stl")
+print(result.vertices.shape, result.faces.shape)
 
-# NumPy arrays
-out_verts, out_faces = me.expand_np(verts, faces, d=0.002, cell_size=0.005)
+# NumPy arrays in / out
+out_verts, out_faces = me.expand_np(verts, faces, d=1.0)
+```
 
-# Class API
-slicer = me.RobustSlicer.with_cell_size(0.005)
-expanded = slicer.expand_merged(mesh, d=0.002)
+> **Binary STL only.** ASCII STL is not accepted — `read_stl` / `expand_file` raise on it. Choose "Binary" when exporting from FreeCAD / MeshLab etc.
+
+### C++ — single mesh
+
+```cpp
+#include "expander/BoxExpander.hpp"
+#include "expander/StlReader.hpp"
+#include "expander/StlWriter.hpp"
+
+expander::Mesh input  = expander::StlReader::read("part.stl");  // binary STL
+expander::BoxExpander exp;
+expander::Mesh result = exp.expand(input, 1.0);                 // d = 1mm
+expander::StlWriter::write("expanded.stl", result);
+```
+
+### Multi-part CAD assembly (STEP / OBJ / FBX)
+
+> ⚠️ **Reading STEP / OBJ / FBX needs the optional Assimp IO layer**, which is *not* in the default build (or the distributed wheels).
+> Build C++ with `cmake -DMESHEXPANDER_BUILD_IO=ON`; in Python, `load_assembly` exists only when `me.HAS_IO` is `True` (a wheel built from source with IO enabled).
+> For STL only, the single-mesh path above needs no IO layer.
+
+```python
+import meshexpander as me
+assert me.HAS_IO, "load_assembly requires a build with MESHEXPANDER_BUILD_IO=ON"
+
+parts  = me.load_assembly("assembly.stp")   # each mesh in the file = one part
+parts  = me.merge_contained(parts)          # fold nested sub-features (holes, bosses)
+models = me.expand_assembly(parts, d=1.0)
 ```
 
 ---
 
-## Results
+## The carving method
 
-![MeshExpander 3D rotation demo](docs/images/rotate3d.gif)
+### Concept
 
-*Blue: original input mesh · Green: conservative expansion result (distance d guaranteed in every direction) — Hollow Cylinder, Gear (12 teeth), Torus (donut hole preserved)*
+The **carving method** builds the expanded model by generating half-spaces from the input mesh's face normals and intersecting them. By analogy with subtractive machining: retract a cutting plane by `d` along every face direction, intersect them all, and you get a closed polytope that contains the original shape.
 
-## How It Works
+```
+     face normal n₁ →  ─────────────  half-space bound D₁ = max(V·n₁) + d
+     face normal n₂ →  ─────────────  half-space bound D₂ = max(V·n₂) + d
+     face normal n₃ →  ─────────────  half-space bound D₃ = max(V·n₃) + d
+                        ↓
+                  intersection of half-spaces = expanded model (closed convex polytope)
+```
 
-![MeshExpander algorithm demo](docs/images/demo.gif)
+### Algorithm
 
-*Left: original mesh · Center: solid voxelization with BFS flood-fill · Right: conservative expansion by margin d*
+```
+input mesh (one part)
+  │
+  1. Initial box   take the mesh AABB
+  │                expandedBox = AABB ± d   (initial polytope bound)
+  │
+  2. Face normals  collect all triangle normals
+  │                merge near-parallel normals within 20° → k directions
+  │
+  3. Half-spaces   for each direction n:
+  │                D_i = max(V · n) + d
+  │                (max projection of all vertices along n, plus the offset)
+  │
+  4. Carve         ClippingEngine::clip(expandedBox, half-spaces)
+  │                intersect the 6 box faces + k face-normal half-spaces
+  │                → enumerate & keep the C(k+6, 3) plane-triple intersections
+  │
+  output: a single closed convex polytope (vertex count ≤ C(k+6, 3))
+```
 
----
+### Conservativeness guarantee
 
-## Features
+For any input vertex `v` and every direction `n_i`:
 
-| Feature | Detail |
+```
+v · n_i  ≤  max(V · n_i)  =  D_i - d  <  D_i
+```
+
+so `v` lies **inside every half-space** of the output with a margin of `d`. → The generated hull provably never under-covers the part, so a clearance/interference check built on it cannot return a false "safe."
+
+### Properties
+
+| Property | Detail |
 |---|---|
-| **Strict conservativeness** | Every input vertex lies strictly inside the output by margin `d` |
-| **Concave shape support** | Sparse voxel partitioning + greedy box merging preserves concavities |
-| **Tight fit** | Per-box local face normals cut 5–64% of ConservativeExpander's volume for real meshes |
-| **NaN/Inf safe** | All floating-point edge cases handled with safety margins |
-| **Single-header I/O** | Binary STL reader and writer included, zero extra dependencies |
-| **Header-only Eigen** | Only dependency; fetched automatically by CMake FetchContent |
-| **Python bindings** | pybind11 module with numpy array support (`expand_np`, `expand_file`, STL I/O) |
+| Output shape | A single closed convex polytope |
+| Vertex-count bound | C(k+6, 3) (k = number of face-normal directions; independent of input face count) |
+| Expansion guarantee | Every input vertex sits at least `d` inside the output |
+| Shape-adaptive | Uses shape-specific directions (face normals), not a fixed direction set |
+| Numerical safety | kSafetyMargin = 1e-6 added to every half-space |
 
 ---
 
-## Algorithm
+## Benchmarks
 
-### ConservativeExpander — convex shapes
+### Convex shapes (d = 1 mm)
 
-```
-Input mesh (vertices + faces)
-  │
-  1. Face-normal extraction    Collect all face normals → merge at 20° threshold
-  │                            (fallback: 26 fixed directions if no face data)
-  2. Half-space generation     For each direction n: D = max(V·n) + d
-  │
-  3. Robust intersection       C(k,3) plane triples × ColPivHouseholderQR
-  │                            keep only points inside all half-spaces
-  4. Mesh assembly             Boundary vertices sorted by angle → fan triangulation
-  │
-  5. Denormalization           Back to world coordinates
-  Output: single closed polytope, vertex count ≤ C(k,3), independent of input size
-```
-
-**Accuracy (d = 1 mm):**
-
-| Shape | Volume ratio | Over-expansion |
-|---|---|---|
-| Sphere (R = 10–100) | 1.033 | +3.3% |
-| Cylinder | 1.012 | +1.2% |
-| Cone (H = 3R) | 1.013 | +1.3% |
-
-### RobustSlicer — concave shapes
-
-```
-Input mesh (any topology)
-  │
-  1. VoxelGrid::build()         Solid voxelization in two passes:
-  │    a. Surface rasterization  Conservative triangle-AABB marks surface voxels
-  │    b. solidFill()            BFS flood-fill from exterior border cells;
-  │                              all unreached unoccupied cells → solid interior
-  │                              (result: every interior voxel filled, hollow gaps preserved)
-  2. VoxelGrid::greedyMerge()   Top-down recursive partitioner:
-  │                              all-empty → discard | all-occupied → emit one large box
-  │                              mixed → best-axis split (prefix-sum purity score) → recurse
-  │                              (solid interior regions emit single large boxes — very few polytopes)
-  3. Per-box local expansion     For each box:
-  │    a. Collect faces whose AABB intersects the box
-  │    b. Merge near-parallel normals (20° threshold)
-  │    c. D_i = max(local_vertices · n_i) + d
-  │    d. ClippingEngine::clip(expandedBox, half-spaces)
-  4. Output: vector<Mesh>        One closed convex polytope per box
-             expandMerged()      All polytopes concatenated into one STL-ready mesh
-```
-
-**Stanford Bunny results (cellSize = 5 mm, d = 1 mm):**
-
-| Mesh resolution | Polytopes | robust / conservative | Conservativeness |
+| Shape | Volume ratio | Over-expansion | Fixed 26-dir |
 |---|---|---|---|
-| res4 (948 faces) | 365 | 0.50 (−50%) | 99.8% vertices covered |
-| res3 (3 851 faces) | 578 | 0.42 (−58%) | 99.5% vertices covered |
-| Full (69 451 faces) | 616 | 0.36 (−64%) | 99.8% vertices covered |
+| Sphere (R = 10–100) | 1.033 | +3.3% | ~1.14 |
+| Cylinder | 1.012 | +1.2% | ~1.055 |
+| Cone (H = 3R) | 1.013 | +1.3% | ~2.0–2.2 (apex hit) |
 
-**CAD shape benchmark (cellSize = 5 mm, d = 1 mm) — procedurally generated shapes:**
+*The right column is the volume ratio of the fixed-26-direction method. Because the face-normal mode uses shape-specific directions, it avoids the cone-apex over-expansion (ratio > 2.0) that fixed directions suffer.*
 
-```
-+----------------------+-------+-------+----------+----------+-------+------+------+
-| Shape                | Faces | Boxes | Cons.Vol | Robu.Vol | R/C   | Cov% | Exp% |
-+----------------------+-------+-------+----------+----------+-------+------+------+
-| Torus R60/r20        |   768 |   293 |  0.00094 |  0.00085 | 0.907 |100.0 | 99.6 |
-| Gear 12-tooth        |   288 |    47 |  0.00080 |  0.00089 | 1.109 |100.0 |100.0 |
-| Star prism 5pt       |    40 |     6 |  0.00049 |  0.00047 | 0.966 |100.0 |100.0 |
-| Hollow cylinder      |   256 |    28 |  0.00120 |  0.00096 | 0.801 |100.0 |100.0 |
-+----------------------+-------+-------+----------+----------+-------+------+------+
-  Average R/C: 0.946  =>  RobustSlicer is 5.4% tighter on average
-  Cov% = fraction of input vertices inside output polytopes (conservativeness)
-  Exp% = fraction of face centroid+d probes inside output polytopes (expansion >= d)
-```
+### CAD shapes (d = 1 mm)
 
-The hollow cylinder (inner bore as large concave cavity) achieves R/C = 0.80 (−20%).
-The torus (donut hole) achieves R/C = 0.91 (−9%).
-Coverage and expansion ≥ d hold at 100% for all shapes.
+| Shape | Cov% | Exp% |
+|---|---|---|
+| Torus R60/r20 | 100.0 | 99.6 |
+| 12-tooth gear | 100.0 | 100.0 |
+| 5-point star prism | 100.0 | 100.0 |
+| Hollow cylinder | 100.0 | 100.0 |
+
+*Cov% = fraction of input vertices contained. Exp% = fraction of face-normal `d`-probes contained.*
+
+### Concave shapes (approximate convex decomposition, d = 1 mm)
+
+Setting `maxConvexPieces` / `concavityTol` splits a part by **concavity-driven spatial box partitioning**, carves each box, and unions them. Concave regions are expanded without being filled; polygon count scales roughly with the piece count.
+
+| Shape | Pieces K | Volume ratio | Output faces |
+|---|---|---|---|
+| L-prism | 1 (= single convex) | 1.775 | 12 |
+| L-prism | 4 | 1.591 | 48 |
+| L-prism | 8 | 1.418 | 96 |
+
+*Higher K reduces the wasted fill volume; output face count scales with K. Cov% = 100% at all K.*
+
+> **Scope:** effective for concave corners and steps. For channels/grooves where the convex hull equals the AABB, a union of axis-aligned boxes cannot carve the concavity, so the improvement is limited (it degrades to single-convex).
 
 ---
 
-## Getting Started
+## Installation
 
-### Download prebuilt binaries
+### Python
 
-Prebuilt libraries and Python wheels are available on the [Releases page](https://github.com/sho1106/MeshExpander/releases):
-
-| Platform | C++ library | Python wheel |
-|---|---|---|
-| Windows x64 | `meshexpander-windows-latest.zip` | `meshexpander-*.whl` |
-| Linux x64 | `meshexpander-ubuntu-latest.zip` | `meshexpander-*.whl` |
-| macOS | `meshexpander-macos-latest.zip` | `meshexpander-*.whl` |
-
-Each zip contains `include/` headers + the static library (`.lib` / `.a`).
-
-### Python bindings
-
-**Install from wheel** (recommended):
+**From a wheel** ([Releases](https://github.com/sho1106/MeshExpander/releases)):
 ```bash
-pip install meshexpander  # once published to PyPI
-# or: pip install meshexpander-0.1.0-cp312-win_amd64.whl  (from Releases)
+pip install meshexpander-0.1.0-cp312-win_amd64.whl
 ```
 
-**Build from source:**
+> Prebuilt wheels currently center on **Windows / CPython 3.12**. For other platforms/versions, build from source below.
+> All wheels ship STL only (no IO layer → `me.HAS_IO == False`). For STEP/OBJ/FBX, build from source with IO enabled.
+
+**From source:**
 ```bash
 git clone https://github.com/sho1106/MeshExpander.git
 cd MeshExpander
@@ -181,108 +247,175 @@ pip install scikit-build-core pybind11
 pip install .
 ```
 
-```python
-import meshexpander as me
+### C++ — build from source
 
-# Expand an STL file
-result = me.expand_file("model.stl", d=0.002, cell_size=0.005)
-me.write_stl("expanded.stl", result)
-
-# NumPy arrays
-import numpy as np
-out_verts, out_faces = me.expand_np(verts, faces, d=0.002, cell_size=0.005)
-
-# Full control
-slicer = me.RobustSlicer.with_cell_size(0.005)
-polytopes = slicer.expand_multi(mesh, d=0.002)   # list of closed convex Meshes
-merged    = slicer.expand_merged(mesh, d=0.002)  # single merged mesh
-```
-
-### C++ — Build from source
-
-#### Prerequisites
-
-- CMake ≥ 3.16
-- C++17 compiler (MSVC 2019+, GCC 9+, Clang 10+)
-- Internet connection (Eigen and GoogleTest are fetched automatically)
+**Prerequisites:** CMake ≥ 3.16, a C++17 compiler (MSVC 2019+, GCC 9+, Clang 10+).
 
 ```bash
 git clone https://github.com/sho1106/MeshExpander.git
 cd MeshExpander
-
 cmake -S . -B build
 cmake --build build --config Release
 ```
 
-### Run all tests
-
-```bash
-cmake --build build --config Release --target check
+**Consuming from another CMake project** (after `cmake --install build`):
+```cmake
+find_package(MeshExpander REQUIRED)
+target_link_libraries(your_target PRIVATE MeshExpander::mesh_expander)
 ```
+
+Prebuilt libraries (headers + static `.lib`/`.a`) are also published on the [Releases page](https://github.com/sho1106/MeshExpander/releases).
 
 ---
 
 ## Usage
 
-### Concave mesh expansion (recommended)
+### C++ — per-part expansion from a CAD assembly (recommended)
 
 ```cpp
-#include "expander/RobustSlicer.hpp"
+#include "expander/AssemblyExpander.hpp"
+#include "io/AssimpLoader.hpp"        // build with -DMESHEXPANDER_BUILD_IO=ON
+#include "expander/StlWriter.hpp"
+
+// Load STEP / OBJ / FBX etc. Each mesh in the file = one part.
+expander::io::AssimpLoader loader;
+std::vector<expander::Mesh> parts = loader.load("assembly.stp");
+
+// Fold contained parts into their parent (holes, bosses, sub-features)
+parts = expander::AssemblyExpander::mergeContained(parts);
+
+// Expand each part
+expander::AssemblyExpander expander;
+std::vector<expander::Mesh> models = expander.expand(parts, 1.0);
+
+// Or concatenate all parts into one mesh for export
+expander::Mesh merged = expander.expandMerged(parts, 1.0);
+expander::StlWriter::write("assembly_expanded.stl", merged);
+```
+
+### C++ — concave expansion (approximate convex decomposition)
+
+```cpp
+#include "expander/AssemblyExpander.hpp"
+
+// Default is single-convex. Enable concave handling via options.
+expander::AssemblyExpander::Options opts;
+opts.maxConvexPieces = 8;     // up to 8 convex pieces per part
+opts.concavityTol    = 0.0;   // split until concavity ≤ this tolerance
+
+expander::AssemblyExpander expander(opts);
+std::vector<expander::Mesh> models = expander.expand(parts, 1.0);
+```
+
+### C++ — single mesh
+
+```cpp
+#include "expander/BoxExpander.hpp"
 #include "expander/StlReader.hpp"
 #include "expander/StlWriter.hpp"
 
-expander::Mesh input = expander::StlReader::read("concave_part.stl");
-
-// Fixed 5 mm voxel cell size, expand by 2 mm
-auto slicer = expander::RobustSlicer::withCellSize(0.005);
-expander::Mesh result = slicer.expandMerged(input, 0.002);
-
-expander::StlWriter::write("expanded.stl", result, "expanded part");
+expander::Mesh input = expander::StlReader::read("part.stl");
+expander::BoxExpander exp;
+expander::Mesh result = exp.expand(input, 1.0);
+expander::StlWriter::write("expanded.stl", result);
 ```
 
-### Convex mesh expansion
+### Python
 
-```cpp
-#include "expander/ConservativeExpander.hpp"
+```python
+import meshexpander as me
 
-expander::ConservativeExpander expander;
-expander::Mesh result = expander.expand(input, 0.002);
+# Multi-part assembly (needs HAS_IO)
+parts  = me.load_assembly("assembly.stp")
+models = me.expand_assembly(parts, d=1.0)
+
+# Concave: per-part expansion via approximate convex decomposition
+models = me.expand_assembly(parts, d=1.0, max_convex_pieces=8)
+
+# Single STL file
+me.expand_file("part.stl", d=1.0, output_path="expanded.stl")
+
+# NumPy arrays
+out_verts, out_faces = me.expand_np(verts, faces, d=1.0)
+
+# Anisotropic (directional) clearance: per-axis d = [dx, dy, dz]
+# e.g. 3mm axial pull-out (Z) but 0.5mm radial finish stock (X, Y)
+out_verts, out_faces = me.expand_np(verts, faces, d=[0.5, 0.5, 3.0])
+result = me.BoxExpander().expand(mesh, [0.5, 0.5, 3.0])
 ```
 
-### Access individual polytopes
+> **Anisotropic expansion.** Passing `d` as `[dx, dy, dz]` offsets each axis-aligned
+> face by its own component (the offset is the ellipsoid support `‖n⊙d‖`); a uniform
+> vector reduces exactly to the scalar ball expansion. Useful for directional
+> machining clearance.
 
-```cpp
-auto slicer = expander::RobustSlicer::withCellSize(0.005);
-std::vector<expander::Mesh> polytopes = slicer.expandMulti(input, 0.002);
-// Each polytope is a closed convex mesh; volumes sum correctly.
+---
+
+## Visualization
+
+Inspect meshes interactively with [Open3D](https://www.open3d.org/).
+
+### Python
+
+Three scripts live in `examples/python/`.
+
+| Script | Purpose |
+|---|---|
+| `visualize_single.py` | Single STL — overlay original (blue) and expanded (green) |
+| `visualize_assembly.py` | Multi-part assembly — per-part colors, wireframe + solid (generates a demo with no args) |
+| `visualize_compare.py` | Side-by-side single-convex (K=1) vs concave decomposition (K>1) |
+
+```bash
+pip install open3d
+
+# Try with the bundled sample
+python examples/python/visualize_single.py examples/data/cube.stl --d 1.0
+
+# Auto-generate and show a demo assembly (no args)
+python examples/python/visualize_assembly.py --side-by-side
+```
+
+| Key / action | Effect |
+|---|---|
+| Left-drag | Rotate |
+| Right-drag | Pan |
+| Scroll | Zoom |
+| Q / Esc | Quit |
+
+### C++
+
+```bash
+cmake -S examples/cpp -B examples/cpp/build ^
+      -DMeshExpander_SOURCE=projects/MeshExpander ^
+      -DMeshExpander_BUILD=projects/MeshExpander/build ^
+      -DOpen3D_DIR="C:/ProgramData/miniforge3/Lib/site-packages/open3d/cmake"
+cmake --build examples/cpp/build --config Release
+
+examples/cpp/build/Release/visualize.exe part.stl --d 1.0 --side-by-side
 ```
 
 ---
 
-## File Structure
+## Project layout
 
 ```
 MeshExpander/
 ├── include/expander/
-│   ├── IExpander.hpp           Base interface
-│   ├── Mesh.hpp                Vertex + face data structure
-│   ├── MathUtils.hpp           Normalization, direction generation, half-space utils
-│   ├── ConservativeExpander.hpp  Convex-shape expander
-│   ├── ClippingEngine.hpp      Half-space clipping (box + planes)
-│   ├── VoxelGrid.hpp           Solid voxelization + top-down recursive partitioner
-│   ├── RobustSlicer.hpp        Concave-shape expander
-│   ├── StlReader.hpp           Binary STL reader (header-only)
-│   └── StlWriter.hpp           Binary STL writer (header-only)
-├── src/
-│   ├── ConservativeExpander.cpp
-│   ├── ClippingEngine.cpp
-│   ├── VoxelGrid.cpp
-│   └── RobustSlicer.cpp
-├── tests/
-│   ├── unit/                   Per-class unit tests
-│   └── integration/            Shape accuracy and Stanford Bunny tests
-├── docs/
-│   └── README_JA.md            Japanese documentation
+│   ├── BoxExpander.hpp           core carving algorithm
+│   ├── AssemblyExpander.hpp      multi-part orchestrator
+│   ├── BoxPartitioner.hpp        concave support: concavity-driven box partitioning
+│   ├── ClippingEngine.hpp        half-space clipping (internal to BoxExpander)
+│   ├── Mesh.hpp                  vertex + face data structure
+│   ├── MathUtils.hpp             normalization / direction / half-space utilities
+│   ├── StlReader.hpp             binary STL reader (header-only)
+│   └── StlWriter.hpp             binary STL writer (header-only)
+├── src/                          BoxExpander / ClippingEngine / BoxPartitioner / AssemblyExpander
+├── src/io/, include/io/          optional Assimp loader/exporter (STEP/OBJ/FBX)
+├── src/cli/                      meshexpander_cli (requires IO layer)
+├── python/                       pybind11 bindings + type stubs
+├── tests/                        unit / integration / io
+├── examples/                     python & cpp visualizers + sample data
+├── docs/                         README_JA.md + images
 └── CMakeLists.txt
 ```
 
@@ -291,44 +424,47 @@ MeshExpander/
 ## Tests
 
 ```bash
-cd build/Release
+# All tests
+cmake --build build --config Release --target check
 
-# Unit tests (fast, ~1 s)
-./unit_tests
+# Unit tests only (~1s)
+./build/Release/unit_tests
 
-# Integration tests (shape accuracy + Stanford Bunny, ~10 s)
-./integration_tests
+# Integration tests (shape accuracy, ~10s)
+./build/Release/integration_tests
 ```
 
-| Suite | Tests | Verified |
+| Suite | Kind | What it checks |
 |---|---|---|
-| ConservativeExpander | 8 | Conservativeness, robustness, vertex count bound |
-| MathUtils | 10 | Normalization, direction generation, merging |
-| ClippingEngine | 7 | Half-space clipping correctness |
-| VoxelGrid | 8 | Solid voxelization, top-down partitioner, coverage + no-overlap |
-| RobustSlicer (unit) | 8 | Empty input, L-shape coverage, NaN safety |
-| ShapeExpansion | 4 | Sphere / cylinder / cone accuracy ratio |
-| ConcaveExpansion | 4 | L-shape / C-shape conservativeness + volume comparison |
-| StanfordBunny | 3 | Conservativeness + expansion ≥ d + merged STL output |
-| CadShape | 5 | Torus, gear, star prism, hollow cylinder + benchmark table |
-
-**57 tests total — all passing.**
-
-### Stanford Bunny test data
-
-The Stanford Bunny STL files are not committed to the repository due to size.
-See [tests/data/README.md](tests/data/README.md) for download instructions.
+| BoxExpander | unit | conservativeness, robustness, vertex-count bound |
+| MathUtils | unit | normalization, direction generation, merging |
+| ClippingEngine | unit | half-space clipping correctness |
+| BoxPartitioner | unit | concavity calc, convex/concave split, empty-box exclusion |
+| AssemblyExpander | unit | multi-part expansion, mergeContained |
+| StlReader | unit | binary roundtrip, ASCII/corrupt rejection |
+| ShapeExpansion | integration | sphere / cylinder / cone accuracy ratio |
+| CadShape | integration | torus / gear / star / hollow cylinder |
+| ComplexShape | integration | BumpySphere / GroovedCylinder volume ratio |
+| ConcaveExpansion | integration | L/C-shape Cov%=100% + volume reduction + knob monotonicity |
+| AssemblyExpansion | integration | multi-part Cov%=100%, per-part vs merged volume |
+| ComplexAssembly | integration | 5-part equipment assembly |
+| AssimpIO | io | AssimpLoader / AssimpExporter roundtrip (IO build only) |
 
 ---
 
-## Design Principles
+## Design principles
 
-1. **Zero Shrinking** — The expanded shape always fully encloses input + distance `d`. Safety margins push all floating-point errors outward.
-2. **Uniform Scaling** — Normalization uses isotropic scaling only, preserving angles and diagonal distances.
-3. **Numerical Safety** — `kSafetyMargin = 1e-6` added to every half-space offset; degenerate faces skipped silently.
-4. **Input-Size Independence** — Output vertex count is bounded by `C(k, 3)` for convex shapes, independent of input mesh density.
+1. **Zero shrinking** — the expanded shape always contains the input + distance `d`; all floating-point error is pushed outward.
+2. **Part boundaries from the file** — the CAD file's mesh structure (solid-body units) defines part boundaries; no internal re-splitting.
+3. **Shape-adaptive** — face-normal based, not tied to fixed directions; minimal over-expansion via shape-specific directions.
+4. **Input-density independent** — output vertex count is bounded by `C(k+6, 3)` (k = face-normal directions).
+5. **Numerical safety** — each part is normalized to a canonical size before clipping, so the absolute tolerances (`kSafetyMargin`, `kOnPlaneEps`) stay scale-relative and conservativeness holds from micrometer to kilometer scale; `kSafetyMargin` is added outward on every half-space; degenerate faces are silently skipped.
 
 ---
+
+## Contributing
+
+Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). For security reports, see [SECURITY.md](SECURITY.md). Questions: open a GitHub issue.
 
 ## License
 

@@ -4,8 +4,8 @@
 //
 // Reads binary STL files only (ASCII STL is not supported).
 // Each triangle is stored with independent vertices (no vertex sharing).
-// Face normals are re-derived from vertex positions by ConservativeExpander /
-// RobustSlicer — the normal stored in the STL file is ignored.
+// Face normals are re-derived from vertex positions by BoxExpander — the
+// normal stored in the STL file is ignored.
 //
 // Binary STL format:
 //   80 bytes  : header (ignored)
@@ -35,21 +35,27 @@ public:
         std::ifstream ifs(path, std::ios::binary);
         if (!ifs) return {};
 
+        // Total file size — a valid binary STL is exactly 84 + 50*numTris bytes.
+        ifs.seekg(0, std::ios::end);
+        const std::streamoff fileSize = ifs.tellg();
+        ifs.seekg(0, std::ios::beg);
+
         // Header
         char header[80];
         ifs.read(header, 80);
         if (!ifs) return {};
 
-        // ASCII STL starts with "solid" — heuristic reject
-        if (header[0] == 's' && header[1] == 'o' && header[2] == 'l'
-         && header[3] == 'i' && header[4] == 'd') {
-            // Could still be binary with a "solid..." header.
-            // Try reading the triangle count and validate file size.
-        }
-
         uint32_t numTris = 0;
         ifs.read(reinterpret_cast<char*>(&numTris), 4);
         if (!ifs || numTris == 0 || numTris > 50000000u) return {};
+
+        // Reject ASCII / corrupt files: the declared triangle count must match
+        // the file size exactly (84-byte preamble + 50 bytes per triangle).
+        // An ASCII STL (which starts with "solid") will not satisfy this, so it
+        // is rejected here rather than silently parsed as garbage.
+        const std::streamoff expected =
+            84 + static_cast<std::streamoff>(numTris) * 50;
+        if (fileSize != expected) return {};
 
         Mesh m;
         m.vertices.resize(static_cast<int>(numTris) * 3, 3);

@@ -63,6 +63,19 @@ inline Eigen::MatrixXd applyDenormalization(const Eigen::MatrixXd& V,
 }
 
 // ---------------------------------------------------------------------------
+// Geometry helpers
+// ---------------------------------------------------------------------------
+
+// Unit normal of triangle (a,b,c), or the zero vector if degenerate.
+inline Eigen::Vector3d triangleNormal(const Eigen::Vector3d& a,
+                                      const Eigen::Vector3d& b,
+                                      const Eigen::Vector3d& c) {
+    const Eigen::Vector3d n = (b - a).cross(c - a);
+    const double len = n.norm();
+    return (len > kEpsilon) ? Eigen::Vector3d(n / len) : Eigen::Vector3d::Zero();
+}
+
+// ---------------------------------------------------------------------------
 // Direction sets
 // ---------------------------------------------------------------------------
 
@@ -104,23 +117,6 @@ inline std::vector<Eigen::Vector3d> mergeDirections(
 // ---------------------------------------------------------------------------
 // Half-space helpers
 // ---------------------------------------------------------------------------
-
-// Build one half-space per direction from a normalized vertex set.
-// D_i = max_{v in V_n} (v . n_i) + d_scaled
-inline std::vector<HalfSpace> buildHalfSpaces(
-    const Eigen::MatrixXd&             Vn,
-    const std::vector<Eigen::Vector3d>& dirs,
-    double                              dScaled)
-{
-    auto merged = mergeDirections(dirs);
-    std::vector<HalfSpace> hs;
-    hs.reserve(merged.size());
-    for (const auto& n : merged) {
-        double maxDot = (Vn * n).maxCoeff();
-        hs.push_back({n, maxDot + dScaled});
-    }
-    return hs;
-}
 
 // Test whether point pt satisfies ALL half-spaces (with tolerance eps).
 inline bool isInsideAll(const Eigen::Vector3d&          pt,

@@ -1,35 +1,32 @@
-// Integration tests: concave shape expansion accuracy
+// Integration tests: 凹形状の膨張（BoxPartitioner + BoxExpander）
 //
-// Tests verify:
-//   1. Conservativeness: all input vertices are inside the output union
-//   2. Accuracy: sum of output volumes vs ConservativeExpander's single volume
-//      (RobustSlicer should produce a smaller total volume for concave shapes)
-//   3. NaN/Inf safety
+// 検証内容:
+//   1. 保守性 (Cov%=100%): 全入力頂点が、いずれかの凸ピースに距離 d のマージンで包含される
+//   2. 精度 (VolRatio): 分解した方が単一凸より無駄な体積が小さい
+//   3. ポリゴン数: ピース数に概ね比例し、激増しない
+//   4. ノブ単調性: maxConvexPieces を増やすほど無駄な体積が減る
+//   5. NaN/Inf 安全性
 
 #include <gtest/gtest.h>
-#include "expander/RobustSlicer.hpp"
-#include "expander/ConservativeExpander.hpp"
-#include "expander/StlWriter.hpp"
+#include "expander/BoxExpander.hpp"
+#include "expander/BoxPartitioner.hpp"
 
 #include <cmath>
-#include <filesystem>
+#include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-static const std::string kStlOutputDir = "stl_output";
 
 using namespace expander;
 
 // ---------------------------------------------------------------------------
-// Volume of a triangulated closed mesh (divergence theorem)
+// Helpers
 // ---------------------------------------------------------------------------
-static double meshVolume(const Mesh& m) {
+
+// 単一閉多面体の体積（発散定理）
+static double cMeshVolume(const Mesh& m) {
     double vol = 0.0;
     for (const auto& f : m.faces) {
         const Eigen::Vector3d v0 = m.vertices.row(f[0]).transpose();
@@ -40,47 +37,109 @@ static double meshVolume(const Mesh& m) {
     return std::abs(vol) / 6.0;
 }
 
-// ---------------------------------------------------------------------------
-// Check if vertex v is inside any output mesh (AABB containment check)
-// ---------------------------------------------------------------------------
-static bool isInsideUnion(const Eigen::Vector3d&   v,
-                            const std::vector<Mesh>& meshes,
-                            double                   eps = 1e-5)
-{
-    for (const auto& m : meshes) {
-        if (m.numVertices() == 0) continue;
-        const Eigen::Vector3d lo = m.vertices.colwise().minCoeff().transpose();
-        const Eigen::Vector3d hi = m.vertices.colwise().maxCoeff().transpose();
-        if ((v.array() >= lo.array() - eps).all()
-         && (v.array() <= hi.array() + eps).all())
-            return true;
+// 点 pt が単一凸多面体 m の内部（境界 + eps）にあるか
+static bool cInsideConvex(const Eigen::Vector3d& pt, const Mesh& m, double eps) {
+    for (const auto& f : m.faces) {
+        const Eigen::Vector3d v0 = m.vertices.row(f[0]).transpose();
+        const Eigen::Vector3d v1 = m.vertices.row(f[1]).transpose();
+        const Eigen::Vector3d v2 = m.vertices.row(f[2]).transpose();
+        const Eigen::Vector3d n = (v1 - v0).cross(v2 - v0);
+        const double len = n.norm();
+        if (len < 1e-20) continue;
+        if ((pt - v0).dot(n) > eps * len) return false;
     }
+    return true;
+}
+
+// 点 pt が凸ピース集合のいずれかに包含されるか（和集合の内包判定）
+static bool cInsideUnion(const Eigen::Vector3d& pt,
+                         const std::vector<Mesh>& pieces, double eps) {
+    for (const auto& m : pieces)
+        if (!m.faces.empty() && cInsideConvex(pt, m, eps)) return true;
     return false;
 }
 
+// 凸ピース和集合の体積をモンテカルロ推定（重複を二重計上しない真の和体積）。
+// ピースが重なるため sum-of-volumes は使えない。決定論的シードで再現性を担保。
+static double cUnionVolumeMC(const std::vector<Mesh>& pieces, int samples = 200000) {
+    if (pieces.empty()) return 0.0;
+    Eigen::Vector3d lo = Eigen::Vector3d::Constant( 1e30);
+    Eigen::Vector3d hi = Eigen::Vector3d::Constant(-1e30);
+    for (const auto& m : pieces) {
+        if (m.numVertices() == 0) continue;
+        lo = lo.cwiseMin(m.vertices.colwise().minCoeff().transpose());
+        hi = hi.cwiseMax(m.vertices.colwise().maxCoeff().transpose());
+    }
+    const Eigen::Vector3d ext = hi - lo;
+    const double boxVol = ext.x() * ext.y() * ext.z();
+    if (boxVol <= 0.0) return 0.0;
+
+    // 簡易・決定論的 LCG
+    std::uint64_t s = 0x9e3779b97f4a7c15ULL;
+    auto rnd = [&]() {
+        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        return ((s >> 11) & ((1ULL << 53) - 1)) / static_cast<double>(1ULL << 53);
+    };
+    int hits = 0;
+    for (int i = 0; i < samples; ++i) {
+        const Eigen::Vector3d p(lo.x() + ext.x() * rnd(),
+                                lo.y() + ext.y() * rnd(),
+                                lo.z() + ext.z() * rnd());
+        if (cInsideUnion(p, pieces, 1e-9)) ++hits;
+    }
+    return boxVol * static_cast<double>(hits) / samples;
+}
+
+// 部品を K ピース上限で空間分割し、各ボックスを全メッシュに対し d だけ削り出す
+static std::vector<Mesh> decomposeAndExpand(const Mesh& inp, double d,
+                                            int maxPieces, double concavityTol) {
+    BoxPartitioner::Options dopt;
+    dopt.maxConvexPieces = maxPieces;
+    dopt.concavityTol    = concavityTol;
+    const std::vector<Eigen::AlignedBox3d> boxes =
+        BoxPartitioner::partition(inp, dopt);
+
+    BoxExpander exp;
+    std::vector<Mesh> pieces;
+    pieces.reserve(boxes.size());
+    for (const auto& box : boxes) {
+        Mesh m = exp.expand(box, inp, d);
+        if (!m.empty()) pieces.push_back(std::move(m));
+    }
+    return pieces;
+}
+
+static int countCovFailures(const Mesh& inp, const std::vector<Mesh>& pieces, double eps) {
+    int fail = 0;
+    for (int i = 0; i < inp.numVertices(); ++i) {
+        const Eigen::Vector3d v = inp.vertices.row(i).transpose();
+        if (!cInsideUnion(v, pieces, eps)) ++fail;
+    }
+    return fail;
+}
+
+static int totalFaces(const std::vector<Mesh>& pieces) {
+    int n = 0;
+    for (const auto& m : pieces) n += m.numFaces();
+    return n;
+}
+
+
 // ---------------------------------------------------------------------------
-// Mesh factories — with face connectivity
+// Mesh factories (旧 test_concave_expansion.cpp より)
 // ---------------------------------------------------------------------------
 
-// L-shaped prism (concave cross-section extruded along Z)
-// XY cross-section (CCW):  (-R,-R),(R,-R),(R,0),(0,0),(0,R),(-R,R)
-// Z extent: [-H/2, H/2]
-// Ideal volume = (2R * 2R - R * R) * H * 0.5 * 2 ... actually:
-//   full square area = 4R^2, removed top-right square area = R^2
-//   L-area = 4R^2 - R^2 = 3R^2
-//   L-volume = 3R^2 * H
-static Mesh makeLShapeMesh(double R = 10.0, double H = 20.0) {
+// L字プリズム（凹断面を Z 押し出し）。L面積 = 3R^2、体積 = 3R^2 * H
+static Mesh makeLShape(double R = 10.0, double H = 20.0) {
     Mesh m;
     m.vertices.resize(12, 3);
     const double hz = H * 0.5;
-    // Front (z=+hz): 0-5
     m.vertices.row(0)  = Eigen::RowVector3d(-R, -R,  hz);
     m.vertices.row(1)  = Eigen::RowVector3d( R, -R,  hz);
     m.vertices.row(2)  = Eigen::RowVector3d( R,  0,  hz);
     m.vertices.row(3)  = Eigen::RowVector3d( 0,  0,  hz);
     m.vertices.row(4)  = Eigen::RowVector3d( 0,  R,  hz);
     m.vertices.row(5)  = Eigen::RowVector3d(-R,  R,  hz);
-    // Back (z=-hz): 6-11
     m.vertices.row(6)  = Eigen::RowVector3d(-R, -R, -hz);
     m.vertices.row(7)  = Eigen::RowVector3d( R, -R, -hz);
     m.vertices.row(8)  = Eigen::RowVector3d( R,  0, -hz);
@@ -88,34 +147,25 @@ static Mesh makeLShapeMesh(double R = 10.0, double H = 20.0) {
     m.vertices.row(10) = Eigen::RowVector3d( 0,  R, -hz);
     m.vertices.row(11) = Eigen::RowVector3d(-R,  R, -hz);
 
-    // Front face +z (fan from 0, CCW from +z)
     m.faces.push_back({0,1,2}); m.faces.push_back({0,2,3});
     m.faces.push_back({0,3,4}); m.faces.push_back({0,4,5});
-    // Back face -z (reverse winding)
     m.faces.push_back({6,8,7}); m.faces.push_back({6,9,8});
     m.faces.push_back({6,10,9}); m.faces.push_back({6,11,10});
-    // Side faces (quads → 2 triangles each)
-    m.faces.push_back({0,6,7}); m.faces.push_back({0,7,1}); // bottom -y
-    m.faces.push_back({1,7,8}); m.faces.push_back({1,8,2}); // right  +x
-    m.faces.push_back({2,8,9}); m.faces.push_back({2,9,3}); // step   +y
-    m.faces.push_back({3,9,10}); m.faces.push_back({3,10,4}); // inner +x
-    m.faces.push_back({4,10,11}); m.faces.push_back({4,11,5}); // top   +y
-    m.faces.push_back({5,11,6}); m.faces.push_back({5,6,0}); // left   -x
-
+    m.faces.push_back({0,6,7}); m.faces.push_back({0,7,1});
+    m.faces.push_back({1,7,8}); m.faces.push_back({1,8,2});
+    m.faces.push_back({2,8,9}); m.faces.push_back({2,9,3});
+    m.faces.push_back({3,9,10}); m.faces.push_back({3,10,4});
+    m.faces.push_back({4,10,11}); m.faces.push_back({4,11,5});
+    m.faces.push_back({5,11,6}); m.faces.push_back({5,6,0});
     return m;
 }
 
-// U-channel: base + two side walls (concave, open at top in Y)
-// Cross-section: (-R,-R),(R,-R),(R,0),(-R,0) ... no, let's make it C-shaped
-// C-shape cross-section (CCW): (-R,-R),(R,-R),(R,-t),(t,-t),(t,t),(R,t),(R,R),(-R,R)
-// where t = 0.5*R (inner channel half-width = R-t)
-static Mesh makeCShapeMesh(double R = 10.0, double H = 20.0) {
-    const double t  = R * 0.5; // inner wall x-position
+// C字（コの字）プリズム
+static Mesh makeCShape(double R = 10.0, double H = 20.0) {
+    const double t  = R * 0.5;
     const double hz = H * 0.5;
     Mesh m;
     m.vertices.resize(16, 3);
-
-    // Front face (z=+hz): vertices 0-7 (cross-section CCW from +z)
     m.vertices.row(0) = Eigen::RowVector3d(-R, -R,  hz);
     m.vertices.row(1) = Eigen::RowVector3d( R, -R,  hz);
     m.vertices.row(2) = Eigen::RowVector3d( R, -t,  hz);
@@ -124,7 +174,6 @@ static Mesh makeCShapeMesh(double R = 10.0, double H = 20.0) {
     m.vertices.row(5) = Eigen::RowVector3d( R,  t,  hz);
     m.vertices.row(6) = Eigen::RowVector3d( R,  R,  hz);
     m.vertices.row(7) = Eigen::RowVector3d(-R,  R,  hz);
-    // Back face (z=-hz): vertices 8-15
     m.vertices.row(8)  = Eigen::RowVector3d(-R, -R, -hz);
     m.vertices.row(9)  = Eigen::RowVector3d( R, -R, -hz);
     m.vertices.row(10) = Eigen::RowVector3d( R, -t, -hz);
@@ -134,155 +183,134 @@ static Mesh makeCShapeMesh(double R = 10.0, double H = 20.0) {
     m.vertices.row(14) = Eigen::RowVector3d( R,  R, -hz);
     m.vertices.row(15) = Eigen::RowVector3d(-R,  R, -hz);
 
-    // Front face (fan from 0, CCW from +z)
     m.faces.push_back({0,1,2}); m.faces.push_back({0,2,7});
     m.faces.push_back({2,6,7}); m.faces.push_back({2,5,6});
     m.faces.push_back({2,3,5}); m.faces.push_back({3,4,5});
-    // Back face (reversed)
     m.faces.push_back({8,10,9}); m.faces.push_back({8,15,10});
     m.faces.push_back({10,15,14}); m.faces.push_back({10,14,13});
     m.faces.push_back({10,13,11}); m.faces.push_back({11,13,12});
-    // Side faces
-    m.faces.push_back({0, 8, 9}); m.faces.push_back({0, 9, 1}); // bottom -y
-    m.faces.push_back({1, 9,10}); m.faces.push_back({1,10, 2}); // right  +x bottom
-    m.faces.push_back({2,10,11}); m.faces.push_back({2,11, 3}); // inner bottom +y
-    m.faces.push_back({3,11,12}); m.faces.push_back({3,12, 4}); // inner right -x
-    m.faces.push_back({4,12,13}); m.faces.push_back({4,13, 5}); // inner top -y
-    m.faces.push_back({5,13,14}); m.faces.push_back({5,14, 6}); // right  +x top
-    m.faces.push_back({6,14,15}); m.faces.push_back({6,15, 7}); // top    +y
-    m.faces.push_back({7,15, 8}); m.faces.push_back({7, 8, 0}); // left   -x
-
+    m.faces.push_back({0, 8, 9}); m.faces.push_back({0, 9, 1});
+    m.faces.push_back({1, 9,10}); m.faces.push_back({1,10, 2});
+    m.faces.push_back({2,10,11}); m.faces.push_back({2,11, 3});
+    m.faces.push_back({3,11,12}); m.faces.push_back({3,12, 4});
+    m.faces.push_back({4,12,13}); m.faces.push_back({4,13, 5});
+    m.faces.push_back({5,13,14}); m.faces.push_back({5,14, 6});
+    m.faces.push_back({6,14,15}); m.faces.push_back({6,15, 7});
+    m.faces.push_back({7,15, 8}); m.faces.push_back({7, 8, 0});
     return m;
 }
 
 // ---------------------------------------------------------------------------
-// Print helper
+// Tests
 // ---------------------------------------------------------------------------
-static void printComparison(const std::string& label,
-                             double conservativeVol,
-                             double robustTotal,
-                             int    nMeshes,
-                             double idealVol = -1.0)
-{
-    std::cout << std::fixed << std::setprecision(3)
-              << "  " << std::left << std::setw(28) << label
-              << "  conservative=" << std::setw(10) << conservativeVol
-              << "  robust_sum=" << std::setw(10) << robustTotal
-              << "  meshes=" << nMeshes;
-    if (idealVol > 0.0) {
-        std::cout << "  conservative/ideal=" << std::setw(6) << (conservativeVol / idealVol)
-                  << "  robust/ideal=" << std::setw(6) << (robustTotal / idealVol);
-    }
-    std::cout << "\n";
+
+namespace {
+constexpr double kD   = 1.0;   // 膨張距離
+constexpr double kEps = 1e-5;  // 内包判定の許容
 }
 
-// ---------------------------------------------------------------------------
-// Test: L-shape conservativeness
-// All input vertices must be inside the RobustSlicer output union.
-// ---------------------------------------------------------------------------
-TEST(ConcaveExpansion, LShapeConservativeness) {
-    const double d = 1.0;
-    Mesh lshape = makeLShapeMesh(10.0, 20.0);
-    RobustSlicer slicer(8);
-    auto meshes = slicer.expandMulti(lshape, d);
+// 保守性: 分解膨張でも全入力頂点が包含される（Cov%=100%）
+TEST(ConcaveExpansion, LShapeConservative) {
+    const Mesh inp = makeLShape();
+    const auto pieces = decomposeAndExpand(inp, kD, /*maxPieces=*/8, /*tol=*/0.0);
 
-    ASSERT_GT(static_cast<int>(meshes.size()), 0)
-        << "RobustSlicer returned no meshes for L-shape";
+    ASSERT_GE(pieces.size(), 2u) << "L字は最低 2 ピースに分解されるべき";
+    for (const auto& m : pieces)
+        EXPECT_TRUE(m.vertices.allFinite()) << "NaN/Inf in output piece";
 
-    for (int i = 0; i < lshape.numVertices(); ++i) {
-        const Eigen::Vector3d v = lshape.vertices.row(i).transpose();
-        EXPECT_TRUE(isInsideUnion(v, meshes, 1e-4))
-            << "Input vertex " << i << " = " << v.transpose()
-            << " not covered by output union";
-    }
+    const int fail = countCovFailures(inp, pieces, kEps);
+    EXPECT_EQ(fail, 0) << "全頂点が包含されていない (Cov%<100)";
+
+    // ポリゴン数がピース数に対して妥当（激増しない）
+    EXPECT_LE(totalFaces(pieces), 40 * static_cast<int>(pieces.size()));
 }
 
-// ---------------------------------------------------------------------------
-// Test: L-shape — RobustSlicer sum < ConservativeExpander volume
-// The concave shape should benefit from per-box local normals.
-// ---------------------------------------------------------------------------
-TEST(ConcaveExpansion, LShapeRobustBetterThanConservative) {
-    const double d     = 1.0;
-    const double R     = 10.0, H = 20.0;
-    const double idealVol = 3.0 * R * R * H;  // L cross-section = 3R^2
+TEST(ConcaveExpansion, CShapeConservative) {
+    const Mesh inp = makeCShape();
+    const auto pieces = decomposeAndExpand(inp, kD, /*maxPieces=*/8, /*tol=*/0.0);
 
-    Mesh lshape = makeLShapeMesh(R, H);
+    ASSERT_GE(pieces.size(), 2u) << "C字は分解されるべき";
+    for (const auto& m : pieces)
+        EXPECT_TRUE(m.vertices.allFinite());
 
-    ConservativeExpander cExp;
-    Mesh cResult = cExp.expand(lshape, d);
-    const double conservativeVol = (cResult.numFaces() > 0) ? meshVolume(cResult) : 0.0;
-
-    RobustSlicer slicer(8);
-    auto meshes = slicer.expandMulti(lshape, d);
-    double robustTotal = 0.0;
-    for (const auto& m : meshes)
-        if (m.numFaces() > 0) robustTotal += meshVolume(m);
-
-    std::cout << "\n[L-shape concave expansion: R=" << R << " H=" << H << " d=" << d << "]\n";
-    printComparison("L-shape (R=10 H=20)", conservativeVol, robustTotal,
-                    static_cast<int>(meshes.size()), idealVol);
-
-    // Write STL for inspection
-    try {
-        std::filesystem::create_directories(kStlOutputDir);
-        if (cResult.numFaces() > 0)
-            StlWriter::write(kStlOutputDir + "/lshape_conservative.stl", cResult, "L-shape conservative");
-        for (int i = 0; i < static_cast<int>(meshes.size()); ++i)
-            if (meshes[i].numFaces() > 0)
-                StlWriter::write(kStlOutputDir + "/lshape_robust_" + std::to_string(i) + ".stl",
-                                 meshes[i], "L-shape robust " + std::to_string(i));
-    } catch (...) {}
-
-    EXPECT_GT(conservativeVol, 0.0);
-    EXPECT_GT(robustTotal, 0.0);
-    // RobustSlicer's volume sum should be smaller than ConservativeExpander's
-    // (less over-expansion due to per-box local normals)
-    EXPECT_LT(robustTotal, conservativeVol)
-        << "RobustSlicer should produce smaller total volume than ConservativeExpander";
-    // Both must be at least as large as ideal (conservativeness)
-    EXPECT_GE(conservativeVol, idealVol);
-    EXPECT_GE(robustTotal, idealVol);
+    const int fail = countCovFailures(inp, pieces, kEps);
+    EXPECT_EQ(fail, 0) << "全頂点が包含されていない (Cov%<100)";
+    EXPECT_LE(totalFaces(pieces), 40 * static_cast<int>(pieces.size()));
 }
 
-// ---------------------------------------------------------------------------
-// Test: C-shape conservativeness + NaN check
-// ---------------------------------------------------------------------------
-TEST(ConcaveExpansion, CShapeConservativenessAndNoNaN) {
-    const double d = 1.0;
-    Mesh cshape = makeCShapeMesh(10.0, 20.0);
-    RobustSlicer slicer(8);
-    auto meshes = slicer.expandMulti(cshape, d);
+// 精度: 分解した方が単一凸よりも無駄な体積（凹ポケットの埋め）が小さい
+TEST(ConcaveExpansion, DecompositionReducesVolume) {
+    const Mesh inp = makeLShape();
 
-    ASSERT_GT(static_cast<int>(meshes.size()), 0)
-        << "RobustSlicer returned no meshes for C-shape";
+    BoxExpander exp;
+    const Mesh single = exp.expand(inp, kD);
+    const double singleVol = cMeshVolume(single);   // 単一凸（閉多面体）の厳密体積
 
-    // NaN check
-    for (int mi = 0; mi < static_cast<int>(meshes.size()); ++mi)
-        for (int vi = 0; vi < meshes[mi].numVertices(); ++vi)
-            EXPECT_TRUE(meshes[mi].vertices.row(vi).allFinite())
-                << "NaN/Inf at C-shape mesh " << mi << " vertex " << vi;
+    const auto pieces   = decomposeAndExpand(inp, kD, 8, 0.0);
+    const double unionVol = cUnionVolumeMC(pieces); // 和集合の真の体積（MC）
 
-    // Conservativeness
-    for (int i = 0; i < cshape.numVertices(); ++i) {
-        const Eigen::Vector3d v = cshape.vertices.row(i).transpose();
-        EXPECT_TRUE(isInsideUnion(v, meshes, 1e-4))
-            << "C-shape input vertex " << i << " not covered";
+    EXPECT_LT(unionVol, singleVol * 0.95)
+        << "分解膨張の和体積(" << unionVol << ") は単一凸(" << singleVol
+        << ") より明確に小さいはず（L字のノッチが埋まらない）";
+}
+
+// ノブ単調性: maxConvexPieces を増やすほど無駄な体積（和体積）が減る（非増加）
+TEST(ConcaveExpansion, MoreePiecesReduceVolumeMonotonic) {
+    const Mesh inp = makeLShape();
+    const double inpVol = cMeshVolume(inp);
+
+    const std::vector<int> sweep = {1, 2, 4, 8};
+    double prevVol = std::numeric_limits<double>::infinity();
+
+    std::cout << "\n  [L-shape knob sweep] V_input=" << std::fixed
+              << std::setprecision(2) << inpVol << "\n";
+    for (int k : sweep) {
+        const auto pieces = decomposeAndExpand(inp, kD, k, 0.0);
+        ASSERT_FALSE(pieces.empty());
+        EXPECT_EQ(countCovFailures(inp, pieces, kEps), 0)
+            << "K=" << k << " で保守性が破れた";
+
+        const double vol   = cUnionVolumeMC(pieces);
+        const int    faces = totalFaces(pieces);
+        std::cout << "    K=" << k << "  pieces=" << pieces.size()
+                  << "  VolRatio=" << std::setprecision(3) << (vol / inpVol)
+                  << "  faces=" << faces << "\n";
+
+        // 和体積は非増加（MC 誤差 5% の許容つき）。
+        EXPECT_LE(vol, prevVol * 1.05)
+            << "K=" << k << " で和体積が増えた（単調性違反）";
+        prevVol = vol;
     }
 }
 
-// ---------------------------------------------------------------------------
-// Test: multiple resolution values — robustness sweep
-// ---------------------------------------------------------------------------
-TEST(ConcaveExpansion, ResolutionSweepNoNaN) {
-    Mesh lshape = makeLShapeMesh(10.0, 20.0);
-    for (int res : {2, 4, 8, 16}) {
-        SCOPED_TRACE("resolution=" + std::to_string(res));
-        RobustSlicer slicer(res);
-        auto meshes = slicer.expandMulti(lshape, 1.0);
-        EXPECT_GT(static_cast<int>(meshes.size()), 0);
-        for (int mi = 0; mi < static_cast<int>(meshes.size()); ++mi)
-            for (int vi = 0; vi < meshes[mi].numVertices(); ++vi)
-                EXPECT_TRUE(meshes[mi].vertices.row(vi).allFinite())
-                    << "NaN at resolution=" << res << " mesh=" << mi << " v=" << vi;
-    }
+// 既知の制約: C 字（コの字）は凸包が AABB に一致するため、軸平行ボックスの
+// 膨張和では削り出せず、分解しても和体積は単一凸とほぼ同じになる。
+// この挙動を固定して将来の回帰／改善を検知できるようにする。
+TEST(ConcaveExpansion, CShapeKnownLimitation) {
+    const Mesh inp = makeCShape();
+
+    BoxExpander exp;
+    const double singleVol = cMeshVolume(exp.expand(inp, kD));
+    const auto   pieces    = decomposeAndExpand(inp, kD, 8, 0.0);
+    const double unionVol  = cUnionVolumeMC(pieces);
+
+    // 改善は限定的: 単一凸の 95% 以上（ほぼ同じ）。保守性は別テストで担保。
+    EXPECT_GT(unionVol, singleVol * 0.95)
+        << "C字は凸包=AABB のため分解による体積削減はほぼ無いはず "
+           "（union=" << unionVol << " single=" << singleVol << "）";
+}
+
+// concavityTol を緩めるとピース数が減る（凸近似が粗くなる）
+TEST(ConcaveExpansion, LooserToleranceFewerPieces) {
+    const Mesh inp = makeCShape();
+    const auto tight = decomposeAndExpand(inp, kD, 16, 0.1);   // 厳しい → 多ピース
+    const auto loose = decomposeAndExpand(inp, kD, 16, 100.0); // 緩い   → 少ピース
+    EXPECT_GE(tight.size(), loose.size());
+}
+
+// 後方互換: maxPieces=1 は単一凸（従来挙動）と一致
+TEST(ConcaveExpansion, SinglePieceMatchesConvexCarving) {
+    const Mesh inp = makeLShape();
+    const auto pieces = decomposeAndExpand(inp, kD, 1, 0.0);
+    EXPECT_EQ(pieces.size(), 1u);
 }

@@ -1,0 +1,39 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# インデント
+IndentWidth: 4
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+
+# 列幅
+ColumnLimit: 100
+
+# ブレーススタイル
+BreakBeforeBraces: Attach
+
+# ポインタ・参照の位置
+PointerAlignment: Left
+
+# インクルード整理
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # プロジェクトヘッダ
+  - Regex:    '^"expander/'
+    Priority: 1
+  # 標準ライブラリ
+  - Regex:    '^<(algorithm|array|cassert|cmath|cstdint|functional|memory|numeric|optional|stdexcept|string|tuple|unordered_map|utility|vector)>'
+    Priority: 2
+  # サードパーティ (Eigen 等)
+  - Regex:    '^<'
+    Priority: 3
+
+# 空行
+MaxEmptyLinesToKeep: 1
+
+# その他
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false

@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "meshexpander"
 version = "0.1.0"
-description = "Conservative 3D mesh expansion — concave shape support via solid voxelization"
+description = "Conservative 3D mesh expansion for machining clearance models — face-normal box carving with concavity-driven box decomposition"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
@@ -27,6 +27,8 @@ wheel.packages = ["python/meshexpander"]
 
 [tool.scikit-build.cmake.define]
 MESHEXPANDER_BUILD_PYTHON = "ON"
+# Keep the wheel to just the Python module — no static lib / headers / CMake config.
+MESHEXPANDER_INSTALL = "OFF"
 
 [tool.cibuildwheel]
 build = "cp38-* cp39-* cp310-* cp311-* cp312-*"
@@ -40,3 +42,10 @@ before-build = ""
 
 [tool.cibuildwheel.macos]
 before-build = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

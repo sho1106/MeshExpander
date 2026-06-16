@@ -3,7 +3,7 @@
 
 Output: docs/images/demo.gif
 
-Layout: 3 columns (Input / Voxelization / Expansion) + top title bar
+Layout: 3 columns (Input / Bounding Box / Expansion) + top title bar
 Shapes: star prism, hollow cylinder, C-channel cycling through
 Animation: 3 phases, smooth transitions
 '''
@@ -142,7 +142,7 @@ axes = [fig.add_axes([0.01 + k * 0.334, 0.04, 0.31, 0.82], facecolor=BG)
 
 PANEL_LABELS = [
     ("① Input Mesh",                 BLUE),
-    ("② Solid Voxelization",         ORANGE),
+    ("② Bounding Box Carving",       ORANGE),
     ("③ Conservative Expansion ≥ d", GREEN),
 ]
 PANEL_SUB = [
