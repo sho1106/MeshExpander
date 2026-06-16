@@ -14,13 +14,14 @@
 ## 目次
 
 1. [概要](#概要)
-2. [ビルド手順](#ビルド手順)
-3. [使い方](#使い方)
-4. [アルゴリズム詳細](#アルゴリズム詳細)
-5. [凹形状対応](#凹形状対応)
-6. [テスト](#テスト)
-7. [設計原則](#設計原則)
-8. [ファイル構成](#ファイル構成)
+2. [使いどころ / 使わないところ](#使いどころ--使わないところ)
+3. [ビルド手順](#ビルド手順)
+4. [使い方](#使い方)
+5. [アルゴリズム詳細](#アルゴリズム詳細)
+6. [凹形状対応](#凹形状対応)
+7. [テスト](#テスト)
+8. [設計原則](#設計原則)
+9. [ファイル構成](#ファイル構成)
 
 ---
 
@@ -36,7 +37,29 @@ CNC・放電加工では、工具経路計算・干渉チェック・治具設�
 - **数値安全**: 全半空間に `kSafetyMargin = 1e-6` を付加し、浮動小数点誤差を常に外側へ逃がす
 - **軽量依存**: コアは Eigen のみ（CMake FetchContent で自動取得）。STEP/OBJ/FBX 入出力は任意の Assimp レイヤ
 
-> **適用範囲**: 本ライブラリは元形状を内包する保守的な*外殻*を生成します。ポケット・穴・溝・スロットの内側を真にオフセットするものではなく、それらの凹フィーチャは充填されます。真の最小オフセットや複雑な凹面追従が必要な場合は OpenVDB / CGAL を検討してください。詳細は英語版 README の「When to use / When NOT to use」を参照。
+---
+
+## 使いどころ / 使わないところ
+
+MeshExpander は元形状を内包する**保守的な外殻**を生成します。真の最小オフセット（Minkowski オフセット）ではない点に注意してください。
+
+| ✅ 向いている | ❌ 向いていない |
+|---|---|
+| 干渉チェック・治具/クランプの包絡体 | ポケット・穴・溝・スロット内側の正確なクリアランス（凹フィーチャは充填される） |
+| 素材ブロック（ストック）寸法の保証付き見積り | オーガニック/自由曲面の忠実なオフセット |
+| 「絶対に元形状を下回らない」保証が要る用途 | 凸包 = AABB になる貫通溝・キー溝（分解しても改善が小さい） |
+| 高密度メッシュから軽量・低ポリの閉多面体が欲しい | 距離を縮める/負オフセットしたい |
+
+### なぜ OpenVDB / CGAL ではなくこれか
+
+| ツール | 強み | このタスクでの弱み |
+|---|---|---|
+| **MeshExpander** | 解析的な包含保証（縮みゼロ）、低ポリ（入力密度非依存）、Eigen のみ・MIT、pip で入る | 過膨張する／凸寄り、溝・チャンネルに弱い |
+| **OpenVDB** | 任意トポロジ・凹形状の真のオフセット、堅牢 | 解像度依存で*保証*なし、出力が高ポリ、重い依存（TBB 等）。膨張は等方半径のみ（方向別クリアランス不可） |
+| **CGAL** (Minkowski) | 厳密なオフセット | O(n³m³) で大規模 CAD に遅い、GPL/GMP のビルド・ライセンス負担 |
+| **trimesh / Open3D** | I/O・SDF クエリ | メッシュオフセット機能は内蔵されていない |
+
+要するに **「機械加工向けに、保証付き・低ポリ・軽量依存のクリアランス外殻が欲しい」** が MeshExpander の wedge です。真のオフセットや複雑な凹面追従が必要なら OpenVDB を使ってください。
 
 ---
 
@@ -70,6 +93,15 @@ cmake --build build --config Release --target check
 ```bash
 cmake -S . -B build -DMESHEXPANDER_BUILD_IO=ON
 cmake --build build --config Release
+```
+
+### 他の CMake プロジェクトから利用する
+
+`cmake --install build` 後、`find_package` で取り込めます。
+
+```cmake
+find_package(MeshExpander REQUIRED)
+target_link_libraries(your_target PRIVATE MeshExpander::mesh_expander)
 ```
 
 ---
@@ -121,6 +153,22 @@ opts.concavityTol    = 0.0;   // concavity がこの許容値（モデル単位�
 
 expander::AssemblyExpander expander(opts);
 std::vector<expander::Mesh> models = expander.expand(parts, 1.0);
+```
+
+### 異方性（方向別）クリアランス
+
+`d` を軸別 `[dx, dy, dz]` で指定できます。各軸平行面はその成分ぶんだけ膨張し（オフセットは楕円体支持 `‖n⊙d‖`）、均一な `d` はスカラ（ボール）膨張と完全に一致します。例: 軸方向（Z）に 3mm の抜き代、半径方向（X/Y）に 0.5mm の仕上げ代。
+
+```cpp
+#include "expander/BoxExpander.hpp"
+expander::BoxExpander exp;
+expander::Mesh result = exp.expand(mesh, Eigen::Vector3d(0.5, 0.5, 3.0));
+```
+
+```python
+import meshexpander as me
+out_v, out_f = me.expand_np(verts, faces, d=[0.5, 0.5, 3.0])
+result = me.BoxExpander().expand(mesh, [0.5, 0.5, 3.0])
 ```
 
 ---
@@ -245,6 +293,10 @@ MeshExpander/
 ```
 
 ---
+
+## コントリビュート
+
+Issue / PR を歓迎します。[CONTRIBUTING.md](../CONTRIBUTING.md) を参照してください。脆弱性報告は [SECURITY.md](../SECURITY.md) へ。質問は GitHub Issue でどうぞ。
 
 ## ライセンス
 
