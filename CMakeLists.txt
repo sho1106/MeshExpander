@@ -7,34 +7,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(FetchContent)
 
 # ---------- Eigen ----------
-FetchContent_Declare(
-    eigen
-    GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-    GIT_TAG        3.4.0
-    GIT_SHALLOW    TRUE
-)
-# Suppress Eigen's own test suite from registering with CTest
-set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(BUILD_TESTING      OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(eigen)
-set(BUILD_TESTING      ON  CACHE BOOL "" FORCE)
+# Prefer a system/installed Eigen3 (gives an IMPORTED target that survives
+# install/export). Fall back to FetchContent for a zero-setup dev build.
+find_package(Eigen3 3.4 QUIET)
+if(NOT TARGET Eigen3::Eigen)
+    FetchContent_Declare(
+        eigen
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        GIT_TAG        3.4.0
+        GIT_SHALLOW    TRUE
+    )
+    # Suppress Eigen's own test suite from registering with CTest
+    set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING      OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(eigen)
+    set(BUILD_TESTING      ON  CACHE BOOL "" FORCE)
+endif()
 
-# ---------- Assimp (for future file I/O; not yet wired into core lib) ----------
-# NOTE: Assimp is declared here but NOT linked into mesh_expander until
-#       the AssetIO layer is implemented. The STL export currently uses
-#       the lightweight built-in StlWriter (include/expander/StlWriter.hpp).
-# FetchContent_Declare(
-#     assimp
-#     GIT_REPOSITORY https://github.com/assimp/assimp.git
-#     GIT_TAG        v5.3.1
-#     GIT_SHALLOW    TRUE
-# )
-# set(ASSIMP_BUILD_TESTS        OFF CACHE BOOL "" FORCE)
-# set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
-# set(ASSIMP_INSTALL            OFF CACHE BOOL "" FORCE)
-# set(ASSIMP_NO_EXPORT          ON  CACHE BOOL "" FORCE)
-# set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
-# FetchContent_MakeAvailable(assimp)
+# NOTE: Assimp (for STEP/OBJ/FBX I/O) is fetched only when MESHEXPANDER_BUILD_IO=ON;
+#       see the "IO Library" section below. The core links Eigen only.
 
 # ---------- Google Test ----------
 FetchContent_Declare(
@@ -58,8 +49,11 @@ target_include_directories(mesh_expander PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
+# Eigen is a build-time requirement; wrapped in BUILD_INTERFACE so the exported
+# target does not hard-reference the Eigen target (which may be FetchContent's,
+# not installable). MeshExpanderConfig re-attaches Eigen3::Eigen via find_dependency.
 target_link_libraries(mesh_expander PUBLIC
-    Eigen3::Eigen
+    $<BUILD_INTERFACE:Eigen3::Eigen>
 )
 if(MSVC)
     # /utf-8: ソースとリテラルをUTF-8として扱う (CP932誤認識を防ぐ)
@@ -67,6 +61,45 @@ if(MSVC)
     target_compile_options(mesh_expander PRIVATE /utf-8 /W4)
 else()
     target_compile_options(mesh_expander PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+# ---------- Install / export (find_package(MeshExpander)) ----------
+option(MESHEXPANDER_INSTALL "Generate install rules and a CMake package config" ON)
+if(MESHEXPANDER_INSTALL)
+    include(GNUInstallDirs)
+    include(CMakePackageConfigHelpers)
+
+    install(TARGETS mesh_expander
+        EXPORT  MeshExpanderTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+    set(MESHEXPANDER_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/MeshExpander)
+    install(EXPORT MeshExpanderTargets
+        FILE      MeshExpanderTargets.cmake
+        NAMESPACE MeshExpander::
+        DESTINATION ${MESHEXPANDER_CMAKEDIR}
+    )
+
+    configure_package_config_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/MeshExpanderConfig.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/MeshExpanderConfig.cmake
+        INSTALL_DESTINATION ${MESHEXPANDER_CMAKEDIR}
+    )
+    write_basic_package_version_file(
+        ${CMAKE_CURRENT_BINARY_DIR}/MeshExpanderConfigVersion.cmake
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion
+    )
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/MeshExpanderConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/MeshExpanderConfigVersion.cmake
+        DESTINATION ${MESHEXPANDER_CMAKEDIR}
+    )
 endif()
 
 # ---------- IO Library (optional, requires Assimp) ----------
@@ -132,6 +165,8 @@ add_executable(unit_tests
     tests/unit/test_clipping_engine.cpp
     tests/unit/test_box_partitioner.cpp
     tests/unit/test_assembly_expander.cpp
+    tests/unit/test_stl_reader.cpp
+    tests/unit/test_robustness.cpp
 )
 target_link_libraries(unit_tests PRIVATE
     mesh_expander
@@ -145,6 +180,7 @@ add_executable(integration_tests
     tests/integration/test_complex_assembly.cpp
     tests/integration/test_complex_shapes.cpp
     tests/integration/test_concave_expansion.cpp
+    tests/integration/test_scale_robustness.cpp
 )
 target_link_libraries(integration_tests PRIVATE
     mesh_expander

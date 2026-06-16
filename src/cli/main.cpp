@@ -23,10 +23,11 @@ namespace {
 struct Args {
     std::string input;
     std::string output;
-    double      d              = 0.0;
-    int         resolution     = 64;
-    bool        mergeContained = true;
-    bool        verbose        = false;
+    double      d               = 0.0;
+    int         maxConvexPieces = 1;     // >1 enables concave box decomposition
+    double      concavityTol    = 0.0;   // >0 enables concave box decomposition
+    bool        mergeContained  = true;
+    bool        verbose         = false;
 };
 
 void printUsage(const char* prog) {
@@ -40,7 +41,10 @@ void printUsage(const char* prog) {
         << "  --d <distance>    Expansion distance in model units\n"
         << "\n"
         << "Optional:\n"
-        << "  --resolution <n>  Voxel resolution for concave parts [default: 64]\n"
+        << "  --max-pieces <n>   Max convex pieces per part (>1 enables concave\n"
+        << "                     box decomposition) [default: 1 = single convex]\n"
+        << "  --concavity-tol <t> Split until region concavity <= t (model units;\n"
+        << "                     >0 enables concave box decomposition) [default: 0]\n"
         << "  --no-merge        Skip bounding-box containment merging\n"
         << "  --verbose         Print per-step statistics\n"
         << "  --list-formats    Print supported output formats and exit\n";
@@ -60,7 +64,8 @@ Args parseArgs(int argc, char** argv) {
         } else if (a == "--input"      && i+1 < argc) { args.input  = argv[++i]; hasInput  = true; }
         else if  (a == "--output"     && i+1 < argc) { args.output = argv[++i]; hasOutput = true; }
         else if  (a == "--d"          && i+1 < argc) { args.d = std::stod(argv[++i]); hasD = true; }
-        else if  (a == "--resolution" && i+1 < argc) { args.resolution = std::stoi(argv[++i]); }
+        else if  (a == "--max-pieces"   && i+1 < argc) { args.maxConvexPieces = std::stoi(argv[++i]); }
+        else if  (a == "--concavity-tol" && i+1 < argc) { args.concavityTol = std::stod(argv[++i]); }
         else if  (a == "--no-merge")                 { args.mergeContained = false; }
         else if  (a == "--verbose")                  { args.verbose = true; }
         else { throw std::runtime_error("unknown argument: " + a); }
@@ -106,15 +111,15 @@ int main(int argc, char** argv) {
 
         // ── Expand ────────────────────────────────────────────────────────
         AssemblyExpander::Options opts;
-        opts.resolution = args.resolution;
+        opts.maxConvexPieces = args.maxConvexPieces;
+        opts.concavityTol    = args.concavityTol;
         AssemblyExpander expander(opts);
 
         if (args.verbose) {
-            int nConvex = 0;
-            for (const auto& p : parts)
-                if (AssemblyExpander::isConvex(p)) ++nConvex;
-            std::cout << "Parts: " << nConvex << " convex, "
-                      << (static_cast<int>(parts.size()) - nConvex) << " concave\n";
+            const bool concave = (args.maxConvexPieces > 1 || args.concavityTol > 0.0);
+            std::cout << "Parts: " << parts.size()
+                      << (concave ? " (concave box decomposition enabled)"
+                                  : " (single convex per part)") << "\n";
         }
 
         Mesh result = expander.expandMerged(parts, args.d);

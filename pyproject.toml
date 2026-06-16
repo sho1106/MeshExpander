@@ -5,7 +5,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "meshexpander"
 version = "0.1.0"
-description = "Conservative 3D mesh expansion — concave shape support via solid voxelization"
+description = "Conservative 3D mesh expansion for machining clearance models — face-normal box carving with concavity-driven box decomposition"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"

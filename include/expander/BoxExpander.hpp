@@ -36,9 +36,26 @@ public:
                 const Mesh&                mesh,
                 double                     d) const;
 
+    // Anisotropic variant: per-axis expansion distance d = (dx, dy, dz).
+    // The effective offset for a half-space with unit normal n is the ellipsoid
+    // support value
+    //   d_eff(n) = sqrt((n_x·dx)^2 + (n_y·dy)^2 + (n_z·dz)^2)  =  ‖n ⊙ d‖
+    // so an axis-aligned face is expanded by exactly the corresponding component
+    // (e.g. a face with n = +X is offset by dx), and a uniform d = (d,d,d)
+    // reduces to off = d for every unit normal (identical to the scalar/ball
+    // expansion). Conservativeness is preserved for any d >= 0. Use case:
+    // directional machining clearance (e.g. larger axial pull-out than radial
+    // finish stock).
+    Mesh expand(const Eigen::AlignedBox3d& box,
+                const Mesh&                mesh,
+                const Eigen::Vector3d&     d) const;
+
     // Convenience: use mesh's own AABB as the box.
     // Equivalent to: expand(mesh.aabb(), mesh, d)
     Mesh expand(const Mesh& mesh, double d) override;
+
+    // Anisotropic convenience overload (mesh's own AABB as the box).
+    Mesh expand(const Mesh& mesh, const Eigen::Vector3d& d) const;
 
     // Returns indices of faces whose triangle AABB intersects box.
     static std::vector<int> collectFaces(const Mesh&                mesh,

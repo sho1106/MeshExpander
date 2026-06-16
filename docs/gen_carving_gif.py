@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate animated GIF demonstrating the ConservativeExpander algorithm.
+"""Generate animated GIF demonstrating the MeshExpander carving algorithm.
 
 The key concept: start with a bounding box, then carve away corners one by one
 using each face normal's half-space plane. The result is the expansion model.
@@ -170,7 +170,7 @@ ax_title = fig.add_axes([0.0, 0.91, 1.0, 0.09], facecolor=BG)
 ax_title.axis("off")
 ax_title.text(
     0.5, 0.50,
-    "ConservativeExpander: Bounding Box Carving by Face Normals",
+    "MeshExpander: Bounding Box Carving by Face Normals",
     transform=ax_title.transAxes, ha="center", va="center",
     fontsize=12.5, fontweight="bold", color=FG,
     path_effects=[pe.withStroke(linewidth=3, foreground=BG)],

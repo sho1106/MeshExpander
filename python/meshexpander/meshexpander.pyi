@@ -31,21 +31,64 @@ class Mesh:
     def __repr__(self) -> str: ...
 
 
+class AlignedBox3d:
+    """Axis-aligned 3D bounding box defined by its min and max corners."""
+
+    def __init__(
+        self,
+        min: NDArray[np.float64],
+        max: NDArray[np.float64],
+    ) -> None:
+        """Construct from min corner (3,) and max corner (3,)."""
+        ...
+
+    @staticmethod
+    def from_mesh(mesh: Mesh) -> "AlignedBox3d":
+        """Build the axis-aligned bounding box of a mesh's vertices."""
+        ...
+
+    @property
+    def min(self) -> NDArray[np.float64]: ...
+    @property
+    def max(self) -> NDArray[np.float64]: ...
+    def __repr__(self) -> str: ...
+
+
 class BoxExpander:
     """削り出し法コア機能 (Carving Expansion Core).
 
     Expands a box by d and carves it with local face normals from the mesh
     faces that overlap the box, producing a single closed convex polytope.
+
+    Notes
+    -----
+    - Degenerate (zero-area) faces are silently skipped.
+    - If the carved result is degenerate, an empty Mesh is returned (not raised).
+    - Unit-agnostic: the part is normalized internally before clipping, so
+      results are robust across scales (micrometers to kilometers). Keep ``d``
+      in the same units as the geometry.
     """
 
     def __init__(self, face_normal_merge_deg: float = 20.0) -> None: ...
 
-    def expand(self, mesh: Mesh, d: float) -> Mesh:
-        """Expand mesh using its own AABB as the initial box."""
+    def expand(self, mesh: Mesh, d: float | NDArray[np.float64]) -> Mesh:
+        """Expand mesh using its own AABB as the initial box.
+
+        ``d`` may be a scalar (isotropic, ball expansion) or a per-axis vector
+        ``[dx, dy, dz]`` (anisotropic; an axis-aligned face is offset by its
+        component, and a uniform vector matches the scalar case).
+        Returns an empty Mesh if the input is empty or the result is degenerate.
+        """
         ...
 
-    def expand_box(self, box, mesh: Mesh, d: float) -> Mesh:
-        """Expand a specific AABB using nearby face normals from mesh."""
+    def expand_box(
+        self, box: AlignedBox3d, mesh: Mesh, d: float | NDArray[np.float64]
+    ) -> Mesh:
+        """Expand a specific AABB using nearby face normals from mesh.
+
+        ``d`` may be a scalar or a per-axis vector ``[dx, dy, dz]``. Build the
+        box with ``AlignedBox3d(min, max)`` or ``AlignedBox3d.from_mesh(mesh)``.
+        """
         ...
 
 
@@ -55,11 +98,15 @@ class AssemblyExpanderOptions:
     face_normal_merge_deg: float
     """Angle threshold for merging near-parallel face normals (degrees)."""
     concavity_tol: float
-    """Concave support: split until each region's concavity is below this
-    tolerance (world units). 0 keeps single-convex behaviour (default)."""
+    """Concave support: early-stop threshold (world units). The worst region is
+    bisected until every region's concavity is <= this value. Setting it > 0
+    enables splitting even with max_convex_pieces == 1 (up to an internal default
+    of 64 pieces). Default 0 = no early stop."""
     max_convex_pieces: int
     """Concave support: upper bound on convex pieces per part. 1 = single
-    convex (default); >1 enables concavity-driven box decomposition."""
+    convex (default). Splitting is enabled by max_convex_pieces > 1 OR
+    concavity_tol > 0; the worst region is bisected until this many pieces (or
+    concavity_tol) is reached."""
 
     def __init__(self) -> None: ...
 
@@ -84,11 +131,17 @@ class AssemblyExpander:
     def __init__(self, options: Optional[AssemblyExpanderOptions] = None) -> None: ...
 
     def expand(self, parts: list[Mesh], d: float) -> list[Mesh]:
-        """Expand each part independently. Returns one Mesh per input part."""
+        """Expand each part independently. Returns one Mesh per input part
+        (index-aligned). An empty input part yields an empty output Mesh."""
         ...
 
     def expand_merged(self, parts: list[Mesh], d: float) -> Mesh:
-        """Expand all parts and concatenate into a single multi-body mesh."""
+        """Expand all parts and concatenate into a single multi-body mesh.
+
+        NOTE: the result is a concatenation of independent polytopes, not a
+        single closed manifold — do not compute volume on it via the divergence
+        theorem.
+        """
         ...
 
     @staticmethod
@@ -126,7 +179,14 @@ def load_assembly(path: str) -> list[Mesh]:
 # ── STL I/O ──────────────────────────────────────────────────────────────────
 
 def read_stl(path: str) -> Mesh:
-    """Read binary STL file, return Mesh."""
+    """Read a binary STL file and return a Mesh.
+
+    Raises
+    ------
+    RuntimeError
+        If the file is missing, empty, ASCII, or not a valid binary STL.
+        (ASCII STL is not supported — export as Binary.)
+    """
     ...
 
 def write_stl(
@@ -151,9 +211,12 @@ def expand_file(
 def expand_np(
     vertices: NDArray[np.float64],
     faces: NDArray[np.int32],
-    d: float,
+    d: float | NDArray[np.float64],
 ) -> tuple[NDArray[np.float64], NDArray[np.int32]]:
-    """Expand mesh from numpy arrays. Returns (vertices[N2,3], faces[M2,3])."""
+    """Expand mesh from numpy arrays. Returns (vertices[N2,3], faces[M2,3]).
+
+    ``d`` is a scalar (isotropic) or a per-axis vector ``[dx, dy, dz]``.
+    """
     ...
 
 

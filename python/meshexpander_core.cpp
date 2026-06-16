@@ -140,6 +140,38 @@ PYBIND11_MODULE(meshexpander_core, mod) {
                    " faces=" + std::to_string(m.numFaces()) + ">";
         });
 
+    // ── AlignedBox3d ──────────────────────────────────────────────────────────
+    // Minimal binding so BoxExpander.expand_box is callable from Python.
+    py::class_<Eigen::AlignedBox3d>(mod, "AlignedBox3d",
+        "Axis-aligned 3D bounding box defined by its min and max corners.")
+        .def(py::init([](const Eigen::Vector3d& mn, const Eigen::Vector3d& mx) {
+                 return Eigen::AlignedBox3d(mn, mx);
+             }),
+             py::arg("min"), py::arg("max"),
+             "Construct from min corner (3,) and max corner (3,).")
+        .def_static("from_mesh",
+             [](const Mesh& m) {
+                 Eigen::AlignedBox3d b;
+                 for (int i = 0; i < m.numVertices(); ++i)
+                     b.extend(Eigen::Vector3d(m.vertices.row(i).transpose()));
+                 return b;
+             },
+             py::arg("mesh"),
+             "Build the axis-aligned bounding box of a mesh's vertices.")
+        .def_property_readonly("min",
+             [](const Eigen::AlignedBox3d& b) { return Eigen::Vector3d(b.min()); },
+             "Min corner as ndarray[3].")
+        .def_property_readonly("max",
+             [](const Eigen::AlignedBox3d& b) { return Eigen::Vector3d(b.max()); },
+             "Max corner as ndarray[3].")
+        .def("__repr__", [](const Eigen::AlignedBox3d& b) {
+            return "<AlignedBox3d min=[" +
+                   std::to_string(b.min().x()) + "," + std::to_string(b.min().y()) + "," +
+                   std::to_string(b.min().z()) + "] max=[" +
+                   std::to_string(b.max().x()) + "," + std::to_string(b.max().y()) + "," +
+                   std::to_string(b.max().z()) + "]>";
+        });
+
     // ── BoxExpander ───────────────────────────────────────────────────────────
     py::class_<BoxExpander>(mod, "BoxExpander", R"pbdoc(
         削り出し法コア機能 (Carving Expansion Core).
@@ -168,16 +200,37 @@ PYBIND11_MODULE(meshexpander_core, mod) {
              py::overload_cast<const Mesh&, double>(&BoxExpander::expand),
              py::arg("mesh"), py::arg("d"),
              "Expand mesh using its own AABB as the initial box.")
+        .def("expand",
+             py::overload_cast<const Mesh&, const Eigen::Vector3d&>(
+                 &BoxExpander::expand, py::const_),
+             py::arg("mesh"), py::arg("d"),
+             "Anisotropic expansion: per-axis distance d = [dx, dy, dz]. An "
+             "axis-aligned face is offset by its component; uniform d matches the "
+             "scalar (ball) expansion.")
         .def("expand_box",
              py::overload_cast<const Eigen::AlignedBox3d&, const Mesh&, double>(
                  &BoxExpander::expand, py::const_),
              py::arg("box"), py::arg("mesh"), py::arg("d"),
-             "Expand a specific box using nearby face normals from mesh.");
+             "Expand a specific box using nearby face normals from mesh.")
+        .def("expand_box",
+             py::overload_cast<const Eigen::AlignedBox3d&, const Mesh&,
+                               const Eigen::Vector3d&>(&BoxExpander::expand, py::const_),
+             py::arg("box"), py::arg("mesh"), py::arg("d"),
+             "Anisotropic expand_box: per-axis distance d = [dx, dy, dz].");
 
     // ── STL I/O ───────────────────────────────────────────────────────────────
-    mod.def("read_stl",  &StlReader::read,
+    mod.def("read_stl",
+            [](const std::string& path) -> Mesh {
+                Mesh m = StlReader::read(path);
+                if (m.empty())
+                    throw std::runtime_error(
+                        "read_stl: could not read '" + path + "' — not a valid "
+                        "binary STL (ASCII STL is not supported; export as Binary).");
+                return m;
+            },
             py::arg("path"),
-            "Read binary STL file, return Mesh.");
+            "Read a binary STL file and return a Mesh. Raises RuntimeError if the "
+            "file is missing, empty, ASCII, or otherwise not a valid binary STL.");
     mod.def("write_stl", &StlWriter::write,
             py::arg("path"), py::arg("mesh"),
             py::arg("header") = "MeshExpander output",
@@ -193,12 +246,15 @@ PYBIND11_MODULE(meshexpander_core, mod) {
             "Angle threshold for merging near-parallel face normals (degrees)")
         .def_readwrite("concavity_tol",
             &AssemblyExpander::Options::concavityTol,
-            "Concave support: split a part until each region's concavity is below "
-            "this tolerance (world units). 0 keeps the default single-convex behaviour.")
+            "Concave support: early-stop threshold (world units). The worst region is "
+            "bisected until every region's concavity is <= this value. Setting it > 0 "
+            "enables splitting even with max_convex_pieces == 1 (in that case up to an "
+            "internal default of 64 pieces). Default 0 = no early stop.")
         .def_readwrite("max_convex_pieces",
             &AssemblyExpander::Options::maxConvexPieces,
             "Concave support: upper bound on convex pieces per part. 1 = single convex "
-            "(default). >1 enables concavity-driven box decomposition.");
+            "(default). Splitting is enabled by max_convex_pieces > 1 OR concavity_tol > 0; "
+            "the worst region is bisected until this many pieces (or concavity_tol) is reached.");
 
     py::class_<AssemblyExpander>(mod, "AssemblyExpander", R"pbdoc(
         Conservative expansion for multi-part 3D assemblies.
@@ -294,7 +350,9 @@ PYBIND11_MODULE(meshexpander_core, mod) {
            const std::string& output_path) -> Mesh {
             Mesh input = StlReader::read(input_path);
             if (input.empty())
-                throw std::runtime_error("Failed to read STL: " + input_path);
+                throw std::runtime_error(
+                    "expand_file: could not read '" + input_path + "' — not a "
+                    "valid binary STL (ASCII STL is not supported; export as Binary).");
             BoxExpander exp;
             Mesh result = exp.expand(input, d);
             if (!output_path.empty())
@@ -317,5 +375,17 @@ PYBIND11_MODULE(meshexpander_core, mod) {
         py::arg("faces"),
         py::arg("d"),
         "Expand mesh from numpy arrays using BoxExpander (削り出し法). "
+        "Returns (vertices ndarray[N2,3], faces ndarray[M2,3]).");
+
+    mod.def("expand_np",
+        [](DblArray verts, IntArray faces, const Eigen::Vector3d& d)
+           -> std::pair<py::array_t<double>, py::array_t<int32_t>> {
+            return mesh_to_arrays(
+                BoxExpander().expand(arrays_to_mesh(verts, faces), d));
+        },
+        py::arg("vertices"),
+        py::arg("faces"),
+        py::arg("d"),
+        "Anisotropic expand: d = [dx, dy, dz] per-axis distance. "
         "Returns (vertices ndarray[N2,3], faces ndarray[M2,3]).");
 }

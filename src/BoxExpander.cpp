@@ -79,41 +79,75 @@ Mesh BoxExpander::expand(const Eigen::AlignedBox3d& box,
                           const Mesh&                mesh,
                           double                     d) const
 {
+    return expand(box, mesh, Eigen::Vector3d::Constant(d));
+}
+
+Mesh BoxExpander::expand(const Eigen::AlignedBox3d& box,
+                          const Mesh&                mesh,
+                          const Eigen::Vector3d&     d) const
+{
     if (mesh.empty() || mesh.faces.empty()) return {};
 
-    // 1. Expand the box by d to form the initial polytope boundary
+    // 1. Expand the box by d (per-axis) to form the initial polytope boundary
     const Eigen::AlignedBox3d expandedBox(
-        box.min() - Eigen::Vector3d::Constant(d),
-        box.max() + Eigen::Vector3d::Constant(d));
+        box.min() - d,
+        box.max() + d);
+
+    // Normalize to a canonical size before clipping. ClippingEngine uses absolute
+    // tolerances (kOnPlaneEps, kSafetyMargin); without this, a micron-scale model
+    // would collapse to nothing and a kilometre-scale one would be needlessly
+    // coarse. We map the expanded box to roughly [-1, 1]^3, clip there, then map
+    // the result back — the polytope is identical, only the tolerances become
+    // scale-relative. (A point transforms as x_n = (x - center) * s.)
+    const Eigen::Vector3d center = expandedBox.center();
+    const double extent = (expandedBox.max() - expandedBox.min()).maxCoeff();
+    const double s      = (extent > 0.0) ? (2.0 / extent) : 1.0;
+
+    const Eigen::AlignedBox3d boxN(
+        (expandedBox.min() - center) * s,
+        (expandedBox.max() - center) * s);
 
     // 2. Select faces whose AABB overlaps with the original box
     const auto faceIdxs = collectFaces(mesh, box);
 
-    if (faceIdxs.empty()) {
-        // No mesh surface in this box — emit the expanded box as-is
-        return ClippingEngine::clip(expandedBox, {});
-    }
-
-    // 3. Collect face normals
-    const auto normals = faceNormals(mesh, faceIdxs);
-
-    // 4. Merge near-parallel normals
-    const auto merged = math::mergeDirections(normals, faceNormalMergeDeg_);
-
-    // 5. Build half-spaces: D_i = max(local_vertices . n_i) + d
     std::vector<math::HalfSpace> hs;
-    hs.reserve(merged.size());
-    for (const auto& n : merged)
-        hs.push_back({n, maxSupport(mesh, faceIdxs, n) + d});
+    if (!faceIdxs.empty()) {
+        // 3-5. Collect normals, merge near-parallel ones, build half-spaces.
+        // Half-space {x : n·x ≤ D} maps to {x_n : n·x_n ≤ (D − n·center)·s}.
+        const auto normals = faceNormals(mesh, faceIdxs);
+        const auto merged  = math::mergeDirections(normals, faceNormalMergeDeg_);
+        hs.reserve(merged.size());
+        for (const auto& n : merged) {
+            // Effective offset along unit normal n is the support of an ellipsoid
+            // with semi-axes (dx, dy, dz):  off = sqrt((n_x·dx)^2 + (n_y·dy)^2 +
+            // (n_z·dz)^2). An axis-aligned face is offset by exactly its component
+            // (n = +X → dx); a uniform d = (d,d,d) reduces to off = d for every
+            // unit normal (identical to the isotropic ball expansion). off >= 0,
+            // so conservativeness is preserved.
+            const double off = n.cwiseProduct(d).norm();
+            const double D   = maxSupport(mesh, faceIdxs, n) + off;  // world units
+            hs.push_back({n, (D - n.dot(center)) * s});             // normalized
+        }
+    }
+    // (faceIdxs empty → no carving half-spaces; the expanded box is emitted as-is)
 
-    // 6. Clip: expandedBox carved by local half-spaces → single convex polytope
-    return ClippingEngine::clip(expandedBox, hs);
+    // 6. Clip in normalized space, then denormalize: x = x_n / s + center.
+    Mesh out = ClippingEngine::clip(boxN, hs);
+    for (int i = 0; i < out.numVertices(); ++i)
+        out.vertices.row(i) =
+            (out.vertices.row(i).transpose() / s + center).transpose();
+    return out;
 }
 
 // ---------------------------------------------------------------------------
 // expand(mesh, d) — convenience: use mesh's own AABB as the box
 // ---------------------------------------------------------------------------
 Mesh BoxExpander::expand(const Mesh& mesh, double d)
+{
+    return expand(mesh, Eigen::Vector3d::Constant(d));
+}
+
+Mesh BoxExpander::expand(const Mesh& mesh, const Eigen::Vector3d& d) const
 {
     if (mesh.empty() || mesh.faces.empty()) return {};
     const Eigen::AlignedBox3d box(

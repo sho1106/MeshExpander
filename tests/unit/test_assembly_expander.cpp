@@ -111,6 +111,41 @@ TEST(AssemblyExpander, MergeContained_SinglePart) {
     ASSERT_EQ(result.size(), 1u);
 }
 
+TEST(AssemblyExpander, MergeContained_PartInHollowNotAbsorbed) {
+    // The L-shape's AABB is the full [-1,1]^3 box, but its top-right quadrant
+    // (x>0, y>0) is empty (the notch). A small part placed in that notch has its
+    // AABB inside the L's AABB but its centroid OUTSIDE the L solid, so it must
+    // NOT be absorbed (this is the hollow-parent case the centroid check guards).
+    Mesh lshape = makeLShapeMesh();
+    Mesh inNotch = makeCubeMesh(0.2, Eigen::Vector3d(0.5, 0.5, 0.0));
+
+    auto result = AssemblyExpander::mergeContained({lshape, inNotch});
+    EXPECT_EQ(result.size(), 2u);
+}
+
+TEST(AssemblyExpander, MergeContained_PartInSolidAbsorbed) {
+    // A small part inside the L-shape's solid arm (x<0, y<0) is solidly contained
+    // and should be absorbed into the L.
+    Mesh lshape = makeLShapeMesh();
+    Mesh inSolid = makeCubeMesh(0.2, Eigen::Vector3d(-0.5, -0.5, 0.0));
+
+    auto result = AssemblyExpander::mergeContained({lshape, inSolid});
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_EQ(result[0].numVertices(),
+              lshape.numVertices() + inSolid.numVertices());
+}
+
+TEST(AssemblyExpander, MergeContained_MicronScaleStillAbsorbs) {
+    // The point-in-mesh parallel-cull must be scale-relative: a solidly nested
+    // part at micron scale should still be absorbed (regression for the absolute
+    // det threshold that would misclassify at small scale).
+    const double s = 1e-5;
+    Mesh outer = makeCubeMesh(1.0 * s);
+    Mesh inner = makeCubeMesh(0.3 * s);
+    auto result = AssemblyExpander::mergeContained({outer, inner});
+    EXPECT_EQ(result.size(), 1u);
+}
+
 // ---------------------------------------------------------------------------
 // expand — single and multi part
 // ---------------------------------------------------------------------------

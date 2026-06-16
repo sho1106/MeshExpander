@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 #include <tuple>
 #include <unordered_map>
 
@@ -84,6 +86,18 @@ std::vector<Eigen::Vector3d> ClippingEngine::computeVertices(
     const std::vector<HalfSpace>& hs)
 {
     const int n = static_cast<int>(hs.size());
+
+    // Vertex enumeration is O(n^3) (every plane triple). In normal use n is the
+    // 6 box faces plus a handful of merged face-normal directions (typically
+    // < 80, since mergeDirections collapses normals within ~20°). Guard against
+    // pathological inputs that would make this explode into minutes / OOM.
+    static constexpr int kMaxHalfSpaces = 256;
+    if (n > kMaxHalfSpaces)
+        throw std::runtime_error(
+            "ClippingEngine: too many half-spaces (" + std::to_string(n) +
+            " > " + std::to_string(kMaxHalfSpaces) + "); vertex enumeration is "
+            "O(n^3). Increase the face-normal merge angle to reduce direction count.");
+
     std::vector<Eigen::Vector3d> candidates;
     candidates.reserve(n * n);
 

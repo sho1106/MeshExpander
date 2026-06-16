@@ -4,196 +4,242 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/)
 [![CMake](https://img.shields.io/badge/CMake-3.16%2B-green.svg)](https://cmake.org/)
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](#python-bindings)
+[![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](#installation)
 
-**CADアセンブリから部品ごとの削り出し膨張モデルを生成するライブラリ。**
+**English** | [日本語](docs/README_JA.md)
 
-STEP / OBJ / FBX などのマルチパートCADファイルを読み込み、各部品メッシュを距離 `d` だけ保守的に膨張した加工クリアランスモデルを出力する。膨張量 `d` の保証はアルゴリズムで担保されており、頂点・辺・面の取りこぼしはゼロ。
+**A C++17 library that generates per-part machining-clearance models from CAD assemblies.**
 
-![削り出し法: 入力メッシュ → 面法線 → 半空間 → 膨張モデル](docs/images/carving.gif)
+It reads a multi-part CAD file (STEP / OBJ / FBX), and for each part mesh produces a conservatively *expanded* polytope grown outward by a distance `d` — a clearance model for CNC / EDM toolpaths, interference checking, and fixture design. The expansion distance `d` is **algorithmically guaranteed**: no vertex, edge, or face of the input is ever left uncovered.
 
-*① 入力メッシュ → ② 面法線抽出 → ③ 半空間生成 (Dᵢ = max(V·nᵢ) + d) → ④ 削り出し膨張モデル*
+> **For:** CNC / EDM toolpath & fixture engineers who need a *provably conservative* clearance shell — and developers who want a lightweight, embeddable mesh-expansion primitive.
+
+![Carving method: input mesh → face normals → half-spaces → expanded model](docs/images/carving.gif)
+
+*① input mesh → ② face-normal extraction → ③ half-space generation (Dᵢ = max(V·nᵢ) + d) → ④ carved expanded model*
 
 ---
 
 ## Table of Contents
 
-- [ユースケース](#ユースケース)
+- [Use case](#use-case)
+- [When to use / when NOT to use](#when-to-use--when-not-to-use)
 - [Quick Start](#quick-start)
-- [削り出し法](#削り出し法)
-- [ベンチマーク](#ベンチマーク)
-- [インストール](#インストール)
-- [使い方](#使い方)
+- [The carving method](#the-carving-method)
+- [Benchmarks](#benchmarks)
+- [Installation](#installation)
+- [Usage](#usage)
 - [Visualization](#visualization)
-- [ファイル構成](#ファイル構成)
-- [テスト](#テスト)
-- [設計原則](#設計原則)
+- [Project layout](#project-layout)
+- [Tests](#tests)
+- [Design principles](#design-principles)
+- [Contributing](#contributing)
 - [License](#license)
 
 ---
 
-## ユースケース
+## Use case
 
-CNCや放電加工では、工具経路計算・干渉チェック・治具設計のために**加工クリアランスモデル**（元形状を `d` だけ膨らませた閉多面体）が必要になる。
+CNC and EDM machining need a **clearance model** — the original shape inflated by `d` into a closed polytope — for toolpath computation, interference checking, and fixture design.
 
 ```
-CADアセンブリファイル (STEP / OBJ / FBX)
+CAD assembly file (STEP / OBJ / FBX)
   │
-  ├─ 部品A ─→ 膨張モデルA  (距離 d 保証)
-  ├─ 部品B ─→ 膨張モデルB  (距離 d 保証)
-  └─ 部品C ─→ 膨張モデルC  (距離 d 保証)
+  ├─ Part A ─→ expanded model A  (distance d guaranteed)
+  ├─ Part B ─→ expanded model B  (distance d guaranteed)
+  └─ Part C ─→ expanded model C  (distance d guaranteed)
 ```
 
-**部品の境界はファイルのメッシュ構造から決まる。** CADツールがモデリングした部品単位（ソリッドボディ、ノード）をそのまま膨張単位として使う。
+**Part boundaries come from the file's mesh structure.** The part units modeled by the CAD tool (solid bodies, scene nodes) are used directly as expansion units.
+
+> **Units.** MeshExpander is unit-agnostic — coordinates and `d` are in your model's own units. Each part is normalized internally before clipping, so results are robust across scales (verified from micrometers to kilometers); just keep `d` in the same units as the geometry.
+
+---
+
+## When to use / when NOT to use
+
+MeshExpander produces a **conservative outer shell** that contains the original shape. It is **not** a true minimal (Minkowski) offset.
+
+| ✅ Good fit | ❌ Poor fit |
+|---|---|
+| Interference checks, fixture/clamp envelopes | Accurate clearance *inside* pockets, holes, slots (concave features get filled) |
+| Guaranteed stock-block (billet) sizing | Faithful offset of organic / freeform surfaces |
+| Anything needing a "never smaller than the part" guarantee | Through-slots / keyways where convex hull = AABB (decomposition barely helps) |
+| A lightweight, low-poly closed polytope from a dense mesh | Shrinking / negative offset |
+
+### Why not OpenVDB / CGAL?
+
+| Tool | Strength | Weakness for this job |
+|---|---|---|
+| **MeshExpander** | Analytic containment guarantee (zero shrink), low-poly (input-density-independent), Eigen-only, MIT, pip-installable | Over-expands / convex-ish; weak on grooves & channels |
+| **OpenVDB** | True offset of arbitrary concave topology; robust | Resolution-dependent, *no* analytic guarantee; high-poly output; heavy deps (TBB, etc.) |
+| **CGAL** (Minkowski) | Exact offset | O(n³m³) — slow on large CAD; GPL/GMP build & license burden |
+| **trimesh / Open3D** | I/O, SDF queries | No built-in mesh-offset operation |
+
+In short, MeshExpander's wedge is **"a guaranteed, low-poly, lightweight clearance shell for machining."** If you need a true offset or faithful concave following, use OpenVDB.
 
 ---
 
 ## Quick Start
 
-### C++
+The shortest path that works straight after `pip install` — no extra deps, no build. Try it with the bundled binary-STL sample.
+(The relative path `examples/data/cube.stl` below assumes you run from the **root of the cloned repo**; use an absolute path otherwise.)
 
-```cpp
-#include "expander/AssemblyExpander.hpp"
-#include "io/AssimpLoader.hpp"
-#include "expander/StlWriter.hpp"
-
-// マルチパートCADファイルを読み込む（STEP / OBJ / FBX など）
-// ファイル内の各メッシュが 1 部品として分割される
-expander::io::AssimpLoader loader;
-std::vector<expander::Mesh> parts = loader.load("assembly.stp");
-
-// 部品ごとに膨張モデルを生成（距離 2 mm）
-expander::AssemblyExpander expander;
-std::vector<expander::Mesh> models = expander.expand(parts, 0.002);
-
-// 部品別に STL 出力
-for (std::size_t i = 0; i < models.size(); ++i)
-    expander::StlWriter::write("part_" + std::to_string(i) + "_expanded.stl", models[i]);
-```
-
-### Python
+### Python — single STL (start here)
 
 ```python
 import meshexpander as me
 
-# マルチパートファイルから部品ごとの膨張モデルを生成
-parts  = me.load_assembly("assembly.stp")
-exp    = me.AssemblyExpander()
-models = exp.expand(parts, d=0.002)
+# Expand the bundled sample (examples/data/cube.stl, binary STL) by 1mm
+result = me.expand_file("examples/data/cube.stl", d=1.0, output_path="expanded.stl")
+print(result.vertices.shape, result.faces.shape)
 
-# 単一 STL ファイルの場合
-me.expand_file("part.stl", d=0.002, output_path="expanded.stl")
+# NumPy arrays in / out
+out_verts, out_faces = me.expand_np(verts, faces, d=1.0)
+```
+
+> **Binary STL only.** ASCII STL is not accepted — `read_stl` / `expand_file` raise on it. Choose "Binary" when exporting from FreeCAD / MeshLab etc.
+
+### C++ — single mesh
+
+```cpp
+#include "expander/BoxExpander.hpp"
+#include "expander/StlReader.hpp"
+#include "expander/StlWriter.hpp"
+
+expander::Mesh input  = expander::StlReader::read("part.stl");  // binary STL
+expander::BoxExpander exp;
+expander::Mesh result = exp.expand(input, 1.0);                 // d = 1mm
+expander::StlWriter::write("expanded.stl", result);
+```
+
+### Multi-part CAD assembly (STEP / OBJ / FBX)
+
+> ⚠️ **Reading STEP / OBJ / FBX needs the optional Assimp IO layer**, which is *not* in the default build (or the distributed wheels).
+> Build C++ with `cmake -DMESHEXPANDER_BUILD_IO=ON`; in Python, `load_assembly` exists only when `me.HAS_IO` is `True` (a wheel built from source with IO enabled).
+> For STL only, the single-mesh path above needs no IO layer.
+
+```python
+import meshexpander as me
+assert me.HAS_IO, "load_assembly requires a build with MESHEXPANDER_BUILD_IO=ON"
+
+parts  = me.load_assembly("assembly.stp")   # each mesh in the file = one part
+parts  = me.merge_contained(parts)          # fold nested sub-features (holes, bosses)
+models = me.expand_assembly(parts, d=1.0)
 ```
 
 ---
 
-## 削り出し法
+## The carving method
 
-### 概念
+### Concept
 
-**削り出し法**とは、入力メッシュの面法線から半空間を生成し、その交差として膨張モデルを構築するアルゴリズムである。金属の削り出し加工に例えると、すべての面方向から距離 `d` だけ後退させた切削面を交差させることで、元形状を内包する閉多面体を得る。
+The **carving method** builds the expanded model by generating half-spaces from the input mesh's face normals and intersecting them. By analogy with subtractive machining: retract a cutting plane by `d` along every face direction, intersect them all, and you get a closed polytope that contains the original shape.
 
 ```
-     面法線 n₁ →  ─────────────  半空間境界 D₁ = max(V·n₁) + d
-     面法線 n₂ →  ─────────────  半空間境界 D₂ = max(V·n₂) + d
-     面法線 n₃ →  ─────────────  半空間境界 D₃ = max(V·n₃) + d
+     face normal n₁ →  ─────────────  half-space bound D₁ = max(V·n₁) + d
+     face normal n₂ →  ─────────────  half-space bound D₂ = max(V·n₂) + d
+     face normal n₃ →  ─────────────  half-space bound D₃ = max(V·n₃) + d
                         ↓
-                  半空間の交差 = 膨張モデル（閉凸多面体）
+                  intersection of half-spaces = expanded model (closed convex polytope)
 ```
 
-### アルゴリズム
+### Algorithm
 
 ```
-入力メッシュ（1 部品）
+input mesh (one part)
   │
-  1. 初期ボックス  メッシュの AABB を取得
-  │               expandedBox = AABB ± d  （初期ポリトープ境界）
+  1. Initial box   take the mesh AABB
+  │                expandedBox = AABB ± d   (initial polytope bound)
   │
-  2. 面法線抽出   全三角形の面法線を収集
-  │               20° 以内の近似平行法線をマージ → k 方向
+  2. Face normals  collect all triangle normals
+  │                merge near-parallel normals within 20° → k directions
   │
-  3. 半空間生成   各方向 n に対して
-  │               D_i = max(V · n) + d
-  │               （全頂点の法線方向への射影最大値 + オフセット）
+  3. Half-spaces   for each direction n:
+  │                D_i = max(V · n) + d
+  │                (max projection of all vertices along n, plus the offset)
   │
-  4. 削り出し     ClippingEngine::clip(expandedBox, 半空間群)
-  │               expandedBox の 6 面 + k 個の面法線半空間 を交差
-  │               → C(k+6, 3) 個の平面トリプレット交点を列挙し保持
+  4. Carve         ClippingEngine::clip(expandedBox, half-spaces)
+  │                intersect the 6 box faces + k face-normal half-spaces
+  │                → enumerate & keep the C(k+6, 3) plane-triple intersections
   │
-  出力: 単一の閉凸多面体（頂点数 ≤ C(k+6, 3)）
+  output: a single closed convex polytope (vertex count ≤ C(k+6, 3))
 ```
 
-### 保守性の保証
+### Conservativeness guarantee
 
-入力の任意の頂点 `v` について、各方向 `n_i` に対して次が成り立つ。
+For any input vertex `v` and every direction `n_i`:
 
 ```
 v · n_i  ≤  max(V · n_i)  =  D_i - d  <  D_i
 ```
 
-したがって `v` は出力多面体の**すべての半空間の内側**に距離 `d` のマージンをもって収まる。凸形状では辺・面上の任意の点についても同様の保証が成立する。
+so `v` lies **inside every half-space** of the output with a margin of `d`. → The generated hull provably never under-covers the part, so a clearance/interference check built on it cannot return a false "safe."
 
-### 特性
+### Properties
 
-| 項目 | 内容 |
+| Property | Detail |
 |---|---|
-| 出力形状 | 単一の閉凸多面体 |
-| 頂点数上限 | C(k+6, 3)（k = 面法線方向数、入力の面数に比例しない） |
-| 膨張量保証 | 全入力頂点が出力の内側に距離 d 以上 |
-| 形状適応 | 面法線ベースのため形状固有の方向を使用 |
-| 数値安全性 | kSafetyMargin = 1e-6 を全半空間に付加 |
+| Output shape | A single closed convex polytope |
+| Vertex-count bound | C(k+6, 3) (k = number of face-normal directions; independent of input face count) |
+| Expansion guarantee | Every input vertex sits at least `d` inside the output |
+| Shape-adaptive | Uses shape-specific directions (face normals), not a fixed direction set |
+| Numerical safety | kSafetyMargin = 1e-6 added to every half-space |
 
 ---
 
-## ベンチマーク
+## Benchmarks
 
-### 凸形状 (d = 1 mm)
+### Convex shapes (d = 1 mm)
 
-| 形状 | 体積比 | 過膨張率 |
-|---|---|---|
-| 球 (R = 10–100) | 1.033 | +3.3% |
-| 円柱 | 1.012 | +1.2% |
-| 円錐 (H = 3R) | 1.013 | +1.3% |
-
-### CAD形状 (d = 1 mm)
-
-| 形状 | Cov% | Exp% |
-|---|---|---|
-| トーラス R60/r20 | 100.0 | 99.6 |
-| 12歯ギア | 100.0 | 100.0 |
-| 星型プリズム 5点 | 100.0 | 100.0 |
-| 中空シリンダー | 100.0 | 100.0 |
-
-*Cov% = 入力頂点の包含率。Exp% = 面法線方向 d 先プローブの包含率。*
-
-### 凹形状（近似凸分解, d = 1 mm）
-
-`maxConvexPieces` / `concavityTol` を指定すると、部品を **concavity 駆動で空間ボックス分割**し、
-各ボックスを削り出して和をとる。凹みを埋めずに膨張でき、ポリゴン数はピース数に概ね比例する。
-
-| 形状 | ピース数 K | 体積比 | 出力面数 |
+| Shape | Volume ratio | Over-expansion | Fixed 26-dir |
 |---|---|---|---|
-| L 字プリズム | 1（=単一凸） | 1.775 | 12 |
-| L 字プリズム | 4 | 1.591 | 48 |
-| L 字プリズム | 8 | 1.418 | 96 |
+| Sphere (R = 10–100) | 1.033 | +3.3% | ~1.14 |
+| Cylinder | 1.012 | +1.2% | ~1.055 |
+| Cone (H = 3R) | 1.013 | +1.3% | ~2.0–2.2 (apex hit) |
 
-*K を増やすほど凹みの埋め（無駄な体積）が減り、出力面数は K に比例する。全 K で Cov% = 100%。*
+*The right column is the volume ratio of the fixed-26-direction method. Because the face-normal mode uses shape-specific directions, it avoids the cone-apex over-expansion (ratio > 2.0) that fixed directions suffer.*
 
-> **適用範囲**: 凹コーナー・段差形状で有効。チャンネル（溝）のように凸包が AABB に一致する形状は、
-> 軸平行ボックスの膨張和では削り出せないため改善が限定的（この場合は単一凸と同等になる）。
+### CAD shapes (d = 1 mm)
+
+| Shape | Cov% | Exp% |
+|---|---|---|
+| Torus R60/r20 | 100.0 | 99.6 |
+| 12-tooth gear | 100.0 | 100.0 |
+| 5-point star prism | 100.0 | 100.0 |
+| Hollow cylinder | 100.0 | 100.0 |
+
+*Cov% = fraction of input vertices contained. Exp% = fraction of face-normal `d`-probes contained.*
+
+### Concave shapes (approximate convex decomposition, d = 1 mm)
+
+Setting `maxConvexPieces` / `concavityTol` splits a part by **concavity-driven spatial box partitioning**, carves each box, and unions them. Concave regions are expanded without being filled; polygon count scales roughly with the piece count.
+
+| Shape | Pieces K | Volume ratio | Output faces |
+|---|---|---|---|
+| L-prism | 1 (= single convex) | 1.775 | 12 |
+| L-prism | 4 | 1.591 | 48 |
+| L-prism | 8 | 1.418 | 96 |
+
+*Higher K reduces the wasted fill volume; output face count scales with K. Cov% = 100% at all K.*
+
+> **Scope:** effective for concave corners and steps. For channels/grooves where the convex hull equals the AABB, a union of axis-aligned boxes cannot carve the concavity, so the improvement is limited (it degrades to single-convex).
 
 ---
 
-## インストール
+## Installation
 
 ### Python
 
-**ホイールからインストール** ([Releases](https://github.com/sho1106/MeshExpander/releases)):
+**From a wheel** ([Releases](https://github.com/sho1106/MeshExpander/releases)):
 ```bash
 pip install meshexpander-0.1.0-cp312-win_amd64.whl
 ```
 
-**ソースからビルド:**
+> Prebuilt wheels currently center on **Windows / CPython 3.12**. For other platforms/versions, build from source below.
+> All wheels ship STL only (no IO layer → `me.HAS_IO == False`). For STEP/OBJ/FBX, build from source with IO enabled.
+
+**From source:**
 ```bash
 git clone https://github.com/sho1106/MeshExpander.git
 cd MeshExpander
@@ -201,9 +247,9 @@ pip install scikit-build-core pybind11
 pip install .
 ```
 
-### C++ — ソースからビルド
+### C++ — build from source
 
-**前提:** CMake ≥ 3.16、C++17 コンパイラ (MSVC 2019+, GCC 9+, Clang 10+)
+**Prerequisites:** CMake ≥ 3.16, a C++17 compiler (MSVC 2019+, GCC 9+, Clang 10+).
 
 ```bash
 git clone https://github.com/sho1106/MeshExpander.git
@@ -212,50 +258,56 @@ cmake -S . -B build
 cmake --build build --config Release
 ```
 
-**プリビルドライブラリ** (ヘッダー + スタティック `.lib`/`.a`) は [Releases ページ](https://github.com/sho1106/MeshExpander/releases)で配布。
+**Consuming from another CMake project** (after `cmake --install build`):
+```cmake
+find_package(MeshExpander REQUIRED)
+target_link_libraries(your_target PRIVATE MeshExpander::mesh_expander)
+```
+
+Prebuilt libraries (headers + static `.lib`/`.a`) are also published on the [Releases page](https://github.com/sho1106/MeshExpander/releases).
 
 ---
 
-## 使い方
+## Usage
 
-### C++ — CADアセンブリから部品ごとの膨張モデル（推奨）
+### C++ — per-part expansion from a CAD assembly (recommended)
 
 ```cpp
 #include "expander/AssemblyExpander.hpp"
-#include "io/AssimpLoader.hpp"
+#include "io/AssimpLoader.hpp"        // build with -DMESHEXPANDER_BUILD_IO=ON
 #include "expander/StlWriter.hpp"
 
-// STEP / OBJ / FBX などを読み込む。ファイル内の各メッシュ = 1 部品。
+// Load STEP / OBJ / FBX etc. Each mesh in the file = one part.
 expander::io::AssimpLoader loader;
 std::vector<expander::Mesh> parts = loader.load("assembly.stp");
 
-// 内包関係にある部品を統合（穴・ボスなどのサブフィーチャ用）
+// Fold contained parts into their parent (holes, bosses, sub-features)
 parts = expander::AssemblyExpander::mergeContained(parts);
 
-// 部品ごとに膨張モデルを生成
+// Expand each part
 expander::AssemblyExpander expander;
-std::vector<expander::Mesh> models = expander.expand(parts, 0.002);
+std::vector<expander::Mesh> models = expander.expand(parts, 1.0);
 
-// 全部品を 1 メッシュに結合して出力することも可能
-expander::Mesh merged = expander.expandMerged(parts, 0.002);
+// Or concatenate all parts into one mesh for export
+expander::Mesh merged = expander.expandMerged(parts, 1.0);
 expander::StlWriter::write("assembly_expanded.stl", merged);
 ```
 
-### C++ — 凹形状の膨張（近似凸分解）
+### C++ — concave expansion (approximate convex decomposition)
 
 ```cpp
 #include "expander/AssemblyExpander.hpp"
 
-// 既定は単一凸（従来挙動）。凹対応はオプションで有効化する。
+// Default is single-convex. Enable concave handling via options.
 expander::AssemblyExpander::Options opts;
-opts.maxConvexPieces = 8;     // 1 部品あたり最大 8 凸ピースまで分割
-opts.concavityTol    = 0.0;   // concavity がこの許容値以下になるまで分割
+opts.maxConvexPieces = 8;     // up to 8 convex pieces per part
+opts.concavityTol    = 0.0;   // split until concavity ≤ this tolerance
 
 expander::AssemblyExpander expander(opts);
-std::vector<expander::Mesh> models = expander.expand(parts, 0.002);
+std::vector<expander::Mesh> models = expander.expand(parts, 1.0);
 ```
 
-### C++ — 単一メッシュの膨張
+### C++ — single mesh
 
 ```cpp
 #include "expander/BoxExpander.hpp"
@@ -264,7 +316,7 @@ std::vector<expander::Mesh> models = expander.expand(parts, 0.002);
 
 expander::Mesh input = expander::StlReader::read("part.stl");
 expander::BoxExpander exp;
-expander::Mesh result = exp.expand(input, 0.002);
+expander::Mesh result = exp.expand(input, 1.0);
 expander::StlWriter::write("expanded.stl", result);
 ```
 
@@ -273,49 +325,62 @@ expander::StlWriter::write("expanded.stl", result);
 ```python
 import meshexpander as me
 
-# マルチパートアセンブリ
+# Multi-part assembly (needs HAS_IO)
 parts  = me.load_assembly("assembly.stp")
-exp    = me.AssemblyExpander()
-models = exp.expand(parts, d=0.002)
+models = me.expand_assembly(parts, d=1.0)
 
-# 凹形状: 近似凸分解で部品ごとに展開（凹みを埋めない）
-models = me.expand_assembly(parts, d=0.002, max_convex_pieces=8)
+# Concave: per-part expansion via approximate convex decomposition
+models = me.expand_assembly(parts, d=1.0, max_convex_pieces=8)
 
-# 単一 STL ファイル
-me.expand_file("part.stl", d=0.002, output_path="expanded.stl")
+# Single STL file
+me.expand_file("part.stl", d=1.0, output_path="expanded.stl")
 
-# NumPy 配列
-out_verts, out_faces = me.expand_np(verts, faces, d=0.002)
+# NumPy arrays
+out_verts, out_faces = me.expand_np(verts, faces, d=1.0)
+
+# Anisotropic (directional) clearance: per-axis d = [dx, dy, dz]
+# e.g. 3mm axial pull-out (Z) but 0.5mm radial finish stock (X, Y)
+out_verts, out_faces = me.expand_np(verts, faces, d=[0.5, 0.5, 3.0])
+result = me.BoxExpander().expand(mesh, [0.5, 0.5, 3.0])
 ```
+
+> **Anisotropic expansion.** Passing `d` as `[dx, dy, dz]` offsets each axis-aligned
+> face by its own component (the offset is the ellipsoid support `‖n⊙d‖`); a uniform
+> vector reduces exactly to the scalar ball expansion. Useful for directional
+> machining clearance.
 
 ---
 
 ## Visualization
 
-[Open3D](https://www.open3d.org/) を使ってメッシュを対話的に確認できる。
+Inspect meshes interactively with [Open3D](https://www.open3d.org/).
 
 ### Python
 
-`examples/python/` に 2 種類のスクリプトを用意している。
+Three scripts live in `examples/python/`.
 
-| スクリプト | 用途 |
+| Script | Purpose |
 |---|---|
-| `visualize_single.py` | 単一 STL — 元形状（青）と膨張モデル（緑）を重ねて表示 |
-| `visualize_assembly.py` | マルチパートアセンブリ — 部品ごとに色分け、ワイヤーフレーム + ソリッド |
+| `visualize_single.py` | Single STL — overlay original (blue) and expanded (green) |
+| `visualize_assembly.py` | Multi-part assembly — per-part colors, wireframe + solid (generates a demo with no args) |
+| `visualize_compare.py` | Side-by-side single-convex (K=1) vs concave decomposition (K>1) |
 
 ```bash
 pip install open3d
 
-python examples/python/visualize_single.py part.stl --d 0.002
-python examples/python/visualize_assembly.py assembly.stp --d 0.002 --side-by-side
+# Try with the bundled sample
+python examples/python/visualize_single.py examples/data/cube.stl --d 1.0
+
+# Auto-generate and show a demo assembly (no args)
+python examples/python/visualize_assembly.py --side-by-side
 ```
 
-| キー / 操作 | 効果 |
+| Key / action | Effect |
 |---|---|
-| 左ドラッグ | 回転 |
-| 右ドラッグ | 平行移動 |
-| スクロール | ズーム |
-| Q / Esc | 終了 |
+| Left-drag | Rotate |
+| Right-drag | Pan |
+| Scroll | Zoom |
+| Q / Esc | Quit |
 
 ### C++
 
@@ -326,85 +391,80 @@ cmake -S examples/cpp -B examples/cpp/build ^
       -DOpen3D_DIR="C:/ProgramData/miniforge3/Lib/site-packages/open3d/cmake"
 cmake --build examples/cpp/build --config Release
 
-examples/cpp/build/Release/visualize.exe part.stl --d 0.002 --side-by-side
+examples/cpp/build/Release/visualize.exe part.stl --d 1.0 --side-by-side
 ```
 
 ---
 
-## ファイル構成
+## Project layout
 
 ```
 MeshExpander/
 ├── include/expander/
-│   ├── BoxExpander.hpp           コアアルゴリズム（削り出し法）
-│   ├── AssemblyExpander.hpp      マルチパートオーケストレータ
-│   ├── Mesh.hpp                  頂点 + 面データ構造
-│   ├── MathUtils.hpp             正規化・方向生成・半空間ユーティリティ
-│   ├── ClippingEngine.hpp        半空間クリッピング（BoxExpander 内部）
-│   ├── BoxPartitioner.hpp      凹対応: concavity 駆動の空間ボックス分割
-│   ├── IModelLoader.hpp          ローダーインタフェース
-│   ├── IModelExporter.hpp        エクスポーターインタフェース
-│   ├── StlReader.hpp             バイナリ STL リーダー（ヘッダーオンリー）
-│   └── StlWriter.hpp             バイナリ STL ライター（ヘッダーオンリー）
-├── src/
-│   ├── BoxExpander.cpp
-│   ├── ClippingEngine.cpp
-│   ├── BoxPartitioner.cpp
-│   └── AssemblyExpander.cpp
-├── python/
-│   ├── meshexpander_core.cpp     pybind11 バインディング
-│   └── meshexpander/
-│       ├── __init__.py
-│       └── meshexpander.pyi      型スタブ (IDE / mypy 用)
-├── tests/
-│   ├── unit/                     クラス単体テスト
-│   ├── integration/              形状精度・アセンブリテスト
-│   └── io/                       Assimp I/O 統合テスト
-├── docs/
+│   ├── BoxExpander.hpp           core carving algorithm
+│   ├── AssemblyExpander.hpp      multi-part orchestrator
+│   ├── BoxPartitioner.hpp        concave support: concavity-driven box partitioning
+│   ├── ClippingEngine.hpp        half-space clipping (internal to BoxExpander)
+│   ├── Mesh.hpp                  vertex + face data structure
+│   ├── MathUtils.hpp             normalization / direction / half-space utilities
+│   ├── StlReader.hpp             binary STL reader (header-only)
+│   └── StlWriter.hpp             binary STL writer (header-only)
+├── src/                          BoxExpander / ClippingEngine / BoxPartitioner / AssemblyExpander
+├── src/io/, include/io/          optional Assimp loader/exporter (STEP/OBJ/FBX)
+├── src/cli/                      meshexpander_cli (requires IO layer)
+├── python/                       pybind11 bindings + type stubs
+├── tests/                        unit / integration / io
+├── examples/                     python & cpp visualizers + sample data
+├── docs/                         README_JA.md + images
 └── CMakeLists.txt
 ```
 
 ---
 
-## テスト
+## Tests
 
 ```bash
-# 全テスト
+# All tests
 cmake --build build --config Release --target check
 
-# ユニットテストのみ（約 1 秒）
+# Unit tests only (~1s)
 ./build/Release/unit_tests
 
-# 統合テスト（形状精度、約 10 秒）
+# Integration tests (shape accuracy, ~10s)
 ./build/Release/integration_tests
 ```
 
-| スイート | 区分 | 検証内容 |
+| Suite | Kind | What it checks |
 |---|---|---|
-| BoxExpander | unit | 保守性・堅牢性・頂点数上限 |
-| MathUtils | unit | 正規化・方向生成・マージ |
-| ClippingEngine | unit | 半空間クリッピング正確性 |
-| BoxPartitioner | unit | concavity 計算・凸/凹分割・空ボックス除外 |
-| AssemblyExpander | unit | マルチパート展開・mergeContained |
-| ShapeExpansion | integration | 球・円柱・円錐の精度比 |
-| CadShape | integration | トーラス・ギア・星型・中空シリンダー |
-| ComplexShape | integration | BumpySphere・GroovedCylinder の VolRatio |
-| ConcaveExpansion | integration | L字・C字の Cov%=100% + 分解による体積削減・ノブ単調性 |
-| AssemblyExpansion | integration | マルチパート Cov%=100%・部品別 vs 統合体積 |
-| ComplexAssembly | integration | 5 パーツ設備アセンブリ |
-| AssimpIO | io | AssimpLoader / AssimpExporter ラウンドトリップ |
+| BoxExpander | unit | conservativeness, robustness, vertex-count bound |
+| MathUtils | unit | normalization, direction generation, merging |
+| ClippingEngine | unit | half-space clipping correctness |
+| BoxPartitioner | unit | concavity calc, convex/concave split, empty-box exclusion |
+| AssemblyExpander | unit | multi-part expansion, mergeContained |
+| StlReader | unit | binary roundtrip, ASCII/corrupt rejection |
+| ShapeExpansion | integration | sphere / cylinder / cone accuracy ratio |
+| CadShape | integration | torus / gear / star / hollow cylinder |
+| ComplexShape | integration | BumpySphere / GroovedCylinder volume ratio |
+| ConcaveExpansion | integration | L/C-shape Cov%=100% + volume reduction + knob monotonicity |
+| AssemblyExpansion | integration | multi-part Cov%=100%, per-part vs merged volume |
+| ComplexAssembly | integration | 5-part equipment assembly |
+| AssimpIO | io | AssimpLoader / AssimpExporter roundtrip (IO build only) |
 
 ---
 
-## 設計原則
+## Design principles
 
-1. **ゼロ縮小** — 膨張後の形状は入力 + 距離 `d` を必ず包含する。浮動小数点誤差はすべて外側に押し出す。
-2. **部品境界はファイルから** — CADファイルのメッシュ構造（ソリッドボディ単位）が部品境界を決める。内部再分割は行わない。
-3. **形状適応** — 面法線ベースのため固定方向に依存しない。形状固有の方向で最小の過膨張を実現。
-4. **入力密度非依存** — 出力頂点数は `C(k+6, 3)` に上限（k = 面法線方向数、入力の面数に比例しない）。
-5. **数値安全性** — `kSafetyMargin = 1e-6` を全半空間オフセットに加算。縮退面は黙って読み飛ばす。
+1. **Zero shrinking** — the expanded shape always contains the input + distance `d`; all floating-point error is pushed outward.
+2. **Part boundaries from the file** — the CAD file's mesh structure (solid-body units) defines part boundaries; no internal re-splitting.
+3. **Shape-adaptive** — face-normal based, not tied to fixed directions; minimal over-expansion via shape-specific directions.
+4. **Input-density independent** — output vertex count is bounded by `C(k+6, 3)` (k = face-normal directions).
+5. **Numerical safety** — each part is normalized to a canonical size before clipping, so the absolute tolerances (`kSafetyMargin`, `kOnPlaneEps`) stay scale-relative and conservativeness holds from micrometer to kilometer scale; `kSafetyMargin` is added outward on every half-space; degenerate faces are silently skipped.
 
 ---
+
+## Contributing
+
+Issues and PRs are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). For security reports, see [SECURITY.md](SECURITY.md). Questions: open a GitHub issue.
 
 ## License
 

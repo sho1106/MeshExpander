@@ -143,7 +143,8 @@ def main():
     parser = argparse.ArgumentParser(description="マルチパートアセンブリ可視化")
     parser.add_argument("inputs", nargs="*",
                         help="STL ファイルのリスト (省略するとデモアセンブリを使用)")
-    parser.add_argument("--d", type=float, default=0.002, help="膨張距離 [m]")
+    parser.add_argument("--d", type=float, default=1.0,
+                        help="expansion distance (same units as the model)")
     parser.add_argument("--max-pieces", type=int, default=1,
                         help="凹分解の最大ピース数/部品 (1=単一凸, >1 で concavity 駆動分割)")
     parser.add_argument("--concavity-tol", type=float, default=0.0,

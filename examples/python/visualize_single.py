@@ -38,7 +38,8 @@ def me_to_o3d(mesh) -> o3d.geometry.TriangleMesh:
 def main():
     parser = argparse.ArgumentParser(description="単体メッシュ可視化")
     parser.add_argument("input", help="入力 STL ファイル")
-    parser.add_argument("--d", type=float, default=0.002, help="膨張距離 [m]")
+    parser.add_argument("--d", type=float, default=1.0,
+                        help="expansion distance (same units as the model)")
     parser.add_argument("--max-pieces", type=int, default=1,
                         help="凹分解の最大ピース数 (1=単一凸, >1 で concavity 駆動分割)")
     parser.add_argument("--concavity-tol", type=float, default=0.0,

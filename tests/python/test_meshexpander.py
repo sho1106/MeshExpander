@@ -290,3 +290,54 @@ class TestFreeFunctions:
         finally:
             os.unlink(inp)
             os.unlink(out)
+
+
+class TestAlignedBox3d:
+    def test_construct_min_max(self):
+        b = me.AlignedBox3d([0, 0, 0], [2, 3, 4])
+        assert np.allclose(b.min, [0, 0, 0])
+        assert np.allclose(b.max, [2, 3, 4])
+
+    def test_from_mesh(self):
+        b = me.AlignedBox3d.from_mesh(make_cube_mesh(2.0))
+        assert np.allclose(b.min, [-2, -2, -2])
+        assert np.allclose(b.max, [2, 2, 2])
+
+    def test_expand_box_callable(self):
+        m = make_cube_mesh(2.0)
+        box = me.AlignedBox3d.from_mesh(m)
+        r = me.BoxExpander().expand_box(box, m, 0.5)
+        assert not r.empty()
+        assert r.num_faces() > 0
+
+
+class TestReadStlRejection:
+    def test_read_stl_raises_on_ascii(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".stl", delete=False) as tmp:
+            tmp.write("solid x\nfacet normal 0 0 1\nendsolid x\n")
+            path = tmp.name
+        try:
+            with pytest.raises(RuntimeError):
+                me.read_stl(path)
+        finally:
+            os.unlink(path)
+
+    def test_read_stl_raises_on_missing(self):
+        with pytest.raises(RuntimeError):
+            me.read_stl("definitely_not_a_real_file_12345.stl")
+
+
+class TestAnisotropic:
+    def test_expand_np_per_axis(self):
+        v, f = make_cube_arrays(1.0)
+        out_v, _ = me.expand_np(v, f, d=[2.0, 0.5, 0.25])
+        mx = out_v.max(axis=0)
+        assert abs(mx[0] - 3.0) < 1e-6   # 1 + 2.0
+        assert abs(mx[1] - 1.5) < 1e-6   # 1 + 0.5
+        assert abs(mx[2] - 1.25) < 1e-6  # 1 + 0.25
+
+    def test_expand_method_isotropic_matches_scalar(self):
+        m = make_cube_mesh(1.0)
+        a = me.BoxExpander().expand(m, 0.5)
+        b = me.BoxExpander().expand(m, np.array([0.5, 0.5, 0.5]))
+        assert a.num_vertices() == b.num_vertices()

@@ -32,13 +32,16 @@ public:
         double faceNormalMergeDeg = 20.0;
 
         // 凹形状対応（concavity 駆動の空間ボックス分割）のノブ。
-        // デフォルトは単一凸=従来挙動。concavityTol > 0 または maxConvexPieces > 1 で
-        // 分割が有効になり、各部品の AABB をボックスに分割して個別に削り出す。
+        // 分割は concavityTol > 0 または maxConvexPieces > 1 で有効になる。
+        // どちらもデフォルト（0 / 1）なら単一凸 = 従来挙動。
         //
-        // concavity がこの許容値（ワールド単位）以下になるまで分割する。
-        // maxConvexPieces 未指定（=1）でも concavityTol>0 なら既定上限まで分割する。
+        // concavityTol: 早期停止の閾値（ワールド単位）。最も concavity の大きい領域を
+        //   二分割していき、全領域の concavity がこの値以下になった時点で止める。
+        //   maxConvexPieces = 1 のまま concavityTol > 0 を指定した場合は、内部の
+        //   既定上限（64 ピース）まで分割する。
         double concavityTol    = 0.0;
-        // 1 部品あたりのボックス（凸ピース）数の上限。1 なら分割しない。
+        // maxConvexPieces: 1 部品あたりのボックス（凸ピース）数の上限。
+        //   > 1 で分割を有効化し、最大このピース数まで（または concavityTol 到達まで）分割する。
         int    maxConvexPieces = 1;
     };
 
@@ -51,12 +54,21 @@ public:
 
     // Expand all parts and concatenate into a single multi-body mesh.
     // Suitable for STL/OBJ export and visual inspection.
+    // NOTE: the result is a concatenation of independent polytopes, NOT a single
+    //       closed manifold. Do not compute volume on it via the divergence
+    //       theorem (adjacent/overlapping faces do not cancel correctly); compute
+    //       per-part volumes from expand() instead.
     Mesh expandMerged(const std::vector<Mesh>& parts, double d) const;
 
-    // Merge parts whose bounding box is fully contained within another part's
-    // bounding box (within tolerance). Absorbed parts have their geometry
-    // appended to the containing part and are removed from the list.
+    // Merge parts that are contained within another part into that parent.
+    // Absorbed parts have their geometry appended to the containing part and are
+    // removed from the list.
     // Use case: CAD sub-features (holes, bosses) that should expand with the parent.
+    // Containment requires BOTH the child's AABB to be inside the parent's AABB
+    // (within tolerance) AND the child's centroid to lie inside the parent mesh
+    // (point-in-mesh ray test). The centroid check prevents wrongly absorbing a
+    // part that sits in a parent's hollow/cavity (e.g. inside an annulus or
+    // C-shape) where the AABBs nest but the solids do not. Assumes closed meshes.
     static std::vector<Mesh> mergeContained(const std::vector<Mesh>& parts,
                                             double tolerance = 1e-6);
 

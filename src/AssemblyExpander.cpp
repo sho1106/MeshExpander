@@ -13,6 +13,45 @@ AssemblyExpander::AssemblyExpander(Options opts)
     : opts_(opts)
 {}
 
+namespace {
+
+// Point-in-closed-mesh test by ray casting along +X (Möller–Trumbore).
+// An odd number of forward crossings means the point is inside the solid.
+// Used by mergeContained to avoid absorbing a part that merely sits inside a
+// parent's bounding box but is actually in the parent's hollow/cavity.
+bool pointInsideMesh(const Mesh& mesh, const Eigen::Vector3d& p) {
+    // Irrational, non-axis-aligned direction: avoids the ray passing exactly
+    // through a shared edge/vertex of an axis-aligned mesh (which would
+    // double-count crossings and misclassify the point).
+    const Eigen::Vector3d dir =
+        Eigen::Vector3d(1.0, 0.4142135624, 0.2718281828).normalized();
+    int crossings = 0;
+    for (const auto& f : mesh.faces) {
+        const Eigen::Vector3d a = mesh.vertices.row(f[0]).transpose();
+        const Eigen::Vector3d b = mesh.vertices.row(f[1]).transpose();
+        const Eigen::Vector3d c = mesh.vertices.row(f[2]).transpose();
+        const Eigen::Vector3d e1 = b - a, e2 = c - a;
+        const Eigen::Vector3d pv = dir.cross(e2);
+        const double det = e1.dot(pv);
+        // Scale-relative parallel cull: |det| ~ parallelogram area, so compare
+        // against the edge magnitudes rather than an absolute epsilon (keeps the
+        // test correct for micron- and kilometre-scale meshes alike).
+        if (std::abs(det) < 1e-12 * (e1.norm() * e2.norm() + 1e-300)) continue;
+        const double inv = 1.0 / det;
+        const Eigen::Vector3d tv = p - a;
+        const double u = tv.dot(pv) * inv;
+        if (u < 0.0 || u > 1.0) continue;
+        const Eigen::Vector3d qv = tv.cross(e1);
+        const double v = dir.dot(qv) * inv;
+        if (v < 0.0 || u + v > 1.0) continue;
+        const double t = e2.dot(qv) * inv;
+        if (t > 1e-12) ++crossings;                   // forward hit only
+    }
+    return (crossings & 1) == 1;
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // mergeContained()
 // ---------------------------------------------------------------------------
@@ -55,14 +94,21 @@ std::vector<Mesh> AssemblyExpander::mergeContained(const std::vector<Mesh>& part
             if (i == j || absorbed[i] || result[i].empty()) continue;
             if (bbs[i].vol <= bbs[j].vol) continue;
 
-            const bool contained =
+            const bool aabbContained =
                 (bbs[i].lo.array() <= bbs[j].lo.array() + tolerance).all() &&
                 (bbs[i].hi.array() >= bbs[j].hi.array() - tolerance).all();
+            if (!aabbContained || bbs[i].vol >= bestVol) continue;
 
-            if (contained && bbs[i].vol < bestVol) {
-                bestContainer = i;
-                bestVol = bbs[i].vol;
-            }
+            // AABB containment is necessary but not sufficient: a part sitting in
+            // the hollow/cavity of a parent (annulus, C-shape) has its AABB inside
+            // the parent's but is NOT solidly contained. Require the child's
+            // centroid to actually lie inside the parent mesh before absorbing.
+            const Eigen::Vector3d centroid =
+                result[j].vertices.colwise().mean().transpose();
+            if (!pointInsideMesh(result[i], centroid)) continue;
+
+            bestContainer = i;
+            bestVol = bbs[i].vol;
         }
 
         if (bestContainer < 0) continue;
