@@ -63,6 +63,18 @@ def make_arrowhead(R=4.0):
     ], dtype=float)
     return pts
 
+def ensure_ccw(poly):
+    """多角形を反時計回り(CCW)に正規化する。
+    法線は (edge_y, -edge_x) で計算しており、これが「外向き」になるのは CCW のときだけ。
+    時計回り(CW)で定義された形状は頂点順を反転して CCW に揃える。"""
+    area2 = 0.0
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        area2 += x0 * y1 - x1 * y0      # 符号付き面積×2 (>0 で CCW)
+    return poly if area2 > 0 else poly[::-1].copy()
+
 def edge_normals_and_offsets(poly, d):
     """各辺の (外向き単位法線, D_i = max(V·n) + d, 辺の中点) を返す"""
     n = len(poly)
@@ -137,6 +149,7 @@ for poly, label in [
     (make_arrowhead(),  "Arrow"),
     (make_diamond(),    "Diamond"),
 ]:
+    poly = ensure_ccw(poly)          # 全形状を CCW に揃え、法線を必ず外向きにする
     steps, expansion = compute_carving_sequence(poly, D_EXPAND)
     bbox = initial_bbox(poly, D_EXPAND)
     SHAPES.append(dict(
