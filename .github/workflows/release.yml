@@ -72,7 +72,8 @@ jobs:
           cp -r include/ pkg/
           find build -name "*.lib" -o -name "*.a" 2>/dev/null | head -1 | xargs -I{} cp {} pkg/lib/ || true
           find build -name "*.dll" -o -name "*.so" -o -name "*.dylib" 2>/dev/null | head -1 | xargs -I{} cp {} pkg/lib/ || true
-          cd pkg && zip -r ../meshexpander-${{ matrix.os }}.zip .
+          # cmake -E tar is cross-platform (Windows runners' Git Bash has no `zip`).
+          cd pkg && cmake -E tar cf ../meshexpander-${{ matrix.os }}.zip --format=zip .
 
       - uses: actions/upload-artifact@v4
         with:
