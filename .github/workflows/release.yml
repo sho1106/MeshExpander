@@ -11,6 +11,7 @@ jobs:
     name: Wheels (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
@@ -22,7 +23,9 @@ jobs:
           python-version: '3.12'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel
+        # Pin to 3.x: cibuildwheel 4.x dropped Python 3.8, which this project
+        # still targets (requires-python >= 3.8, CIBW_BUILD includes cp38).
+        run: pip install "cibuildwheel<4"
 
       - name: Build wheels
         run: cibuildwheel --output-dir dist
