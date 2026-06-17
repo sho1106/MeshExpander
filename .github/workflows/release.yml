@@ -45,7 +45,7 @@ jobs:
         include:
           - os: windows-latest
             lib_name: mesh_expander.lib
-            cmake_extra: -G "Visual Studio 17 2022"
+            cmake_extra: ""
           - os: ubuntu-latest
             lib_name: libmesh_expander.a
             cmake_extra: ""
@@ -83,7 +83,10 @@ jobs:
     runs-on: ubuntu-latest
     # Requires: Settings → Secrets → PYPI_API_TOKEN
     # Create token at: https://pypi.org/manage/account/token/
-    if: ${{ secrets.PYPI_API_TOKEN != '' }}
+    # NOTE: `secrets` cannot be used in a job-level `if:`; gate the publish step
+    #       on an env derived from the secret instead (skipped if no token set).
+    env:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
 
     steps:
       - uses: actions/download-artifact@v4
@@ -92,7 +95,9 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to PyPI
+        if: env.PYPI_API_TOKEN != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
