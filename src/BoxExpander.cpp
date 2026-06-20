@@ -156,4 +156,34 @@ Mesh BoxExpander::expand(const Mesh& mesh, const Eigen::Vector3d& d) const
     return expand(box, mesh, d);
 }
 
+// ---------------------------------------------------------------------------
+// expandSimplified(mesh, d, opt) — carve, then conservative Progressive Hull
+// ---------------------------------------------------------------------------
+Mesh BoxExpander::expandSimplified(const Mesh& mesh, double d,
+                                    const ProgressiveHull::Options& opt) const
+{
+    if (mesh.empty() || mesh.faces.empty()) return {};
+
+    const Eigen::AlignedBox3d box(
+        mesh.vertices.colwise().minCoeff().transpose(),
+        mesh.vertices.colwise().maxCoeff().transpose());
+    const Eigen::AlignedBox3d expandedBox(
+        box.min() - Eigen::Vector3d::Constant(d),
+        box.max() + Eigen::Vector3d::Constant(d));
+
+    // Build the carving half-spaces in WORLD coordinates (D_i = max(V·n)+d), the
+    // removal candidates for ProgressiveHull. The 6 expandedBox faces are added
+    // by ClippingEngine::clip and are never removed (boundedness).
+    const auto faceIdxs = collectFaces(mesh, box);
+    std::vector<math::HalfSpace> hs;
+    if (!faceIdxs.empty()) {
+        const auto normals = faceNormals(mesh, faceIdxs);
+        const auto merged  = math::mergeDirections(normals, faceNormalMergeDeg_);
+        hs.reserve(merged.size());
+        for (const auto& n : merged)
+            hs.push_back({n, maxSupport(mesh, faceIdxs, n) + d});
+    }
+    return ProgressiveHull::simplify(expandedBox, hs, opt);
+}
+
 } // namespace expander

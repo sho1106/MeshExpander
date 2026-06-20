@@ -14,6 +14,7 @@
 
 #include "IExpander.hpp"
 #include "MathUtils.hpp"
+#include "ProgressiveHull.hpp"
 
 #include <Eigen/Geometry>
 #include <vector>
@@ -56,6 +57,16 @@ public:
 
     // Anisotropic convenience overload (mesh's own AABB as the box).
     Mesh expand(const Mesh& mesh, const Eigen::Vector3d& d) const;
+
+    // Carve, then conservatively simplify (Progressive Hull): expand the mesh's
+    // AABB by d, then greedily drop carving half-spaces — each removal only
+    // ENLARGES the polytope, so the result still contains input + d — until the
+    // ProgressiveHull stop criterion (target face count / volume budget). Trades
+    // a little over-expansion for far fewer output faces; stays conservative.
+    // NOTE: the simplification step runs in world coordinates (no internal
+    // normalization), so keep models near unit/millimetre scale.
+    Mesh expandSimplified(const Mesh& mesh, double d,
+                          const ProgressiveHull::Options& opt) const;
 
     // Returns indices of faces whose triangle AABB intersects box.
     static std::vector<int> collectFaces(const Mesh&                mesh,

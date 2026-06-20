@@ -188,6 +188,32 @@ so `v` lies **inside every half-space** of the output with a margin of `d`. → 
 
 ---
 
+## Conservative simplification (progressive hull)
+
+A carved model is an intersection of half-spaces, so **removing a half-space only
+*enlarges* the polytope** — the simplified result still contains the original
+(its volume only grows). `BoxExpander::expandSimplified` greedily drops the
+half-space that adds the least volume until a target face count or a volume
+budget is reached, trading a little extra over-expansion for far fewer output
+faces while staying conservative.
+
+```cpp
+#include "expander/BoxExpander.hpp"
+
+expander::ProgressiveHull::Options opt;
+opt.maxFaces        = 48;    // stop at <= 48 faces ...
+opt.maxVolumeGrowth = 0.10;  // ... or before volume grows past +10%
+expander::Mesh out = expander::BoxExpander().expandSimplified(mesh, 1.0, opt);
+```
+
+The greedy step re-clips per candidate (an exact, unoptimized reference
+implementation), so it is an offline pass suited to the modest half-space counts
+of carved models. The face-count vs over-expansion tradeoff is controlled by
+`maxFaces` / `maxVolumeGrowth`. *Simplification runs in world coordinates — keep
+models near millimetre scale.*
+
+---
+
 ## Benchmarks
 
 ### Convex shapes (d = 1 mm)
