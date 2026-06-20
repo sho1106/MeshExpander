@@ -234,6 +234,23 @@ K を増やすほど凹みの埋め（無駄な体積）が減り、出力面数
 
 ---
 
+## 保守的簡略化（Progressive Hull）
+
+削り出しモデルは半空間の交差なので、**半空間を1つ除去すると多面体は*広がる*だけ**＝簡略化後も元を必ず内包する（体積は増える一方）。`BoxExpander::expandSimplified` は、体積増が最小の半空間を貪欲に除去し、目標面数 or 体積予算に達するまで続けます。**保守性を保ったまま面数を大幅削減**（わずかな過膨張と引き換え）。
+
+```cpp
+#include "expander/BoxExpander.hpp"
+
+expander::ProgressiveHull::Options opt;
+opt.maxFaces        = 48;    // 面数 <= 48 で停止 …
+opt.maxVolumeGrowth = 0.10;  // … または体積増が +10% を超える前に停止
+expander::Mesh out = expander::BoxExpander().expandSimplified(mesh, 1.0, opt);
+```
+
+貪欲ステップは候補ごとに再クリップする厳密だが未最適化のリファレンス実装で、削り出しモデルの少数の半空間に適したオフライン処理です。面数↔過膨張のトレードオフは `maxFaces` / `maxVolumeGrowth` で制御します。*簡略化はワールド座標で動くため、モデルは mm スケール程度に保ってください。*
+
+---
+
 ## テスト
 
 ```bash
