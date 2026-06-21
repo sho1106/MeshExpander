@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "goal": "Find where MeshExpander's conservative carving creates UNIQUE, defensible value.",
+    "method": "PDCA + hypothesis tree. Each node = falsifiable hypothesis with a cheap test. Run trials (parallel), record evidence, prune refuted, expand confirmed. Never claim without a number.",
+    "metrics": {
+      "conservative": "max distance of an ORIGINAL vertex outside the decomposition (0 = certified conservative)",
+      "tight": "mean slack = true_distance - reported_lower_bound over probes (smaller = tighter)",
+      "true_distance": "dense surface-sampling approximation"
+    },
+    "updated": "2026-06-19"
+  },
+  "nodes": [
+    {
+      "id": "R", "parent": null, "status": "narrowed",
+      "h": "Conservative carving can create unique value somewhere.",
+      "conclusion": "Across D/H7/H7b/H3': carving's defensible value is CONSERVATIVE + LOW-POLY on PRISMATIC/axis-aligned (machining) geometry. It can be made certified (max-outside=0) but is looser than CoACD on rotated/curved, and its direction count explodes on curved meshes. => No general collision/distance wedge. Surviving value = the ORIGINAL machining-clearance product (prismatic, certified, low-poly). Next-most-relevant OPEN: H2 (vs voxel/OpenVDB offset for the actual expansion product) and H3 (progressive-hull poly reduction)."
+    },
+    {
+      "id": "D-distance", "parent": "R", "status": "refuted",
+      "h": "A carving-based general distance/collision engine beats CoACD+GJK (faster AND uniquely safe).",
+      "evidence": "diag.py: CoACD (ch-mode) is ~conservative (violations ~1e-4 = remesh noise) and TIGHTER on non-prismatic (rotated L: CoACD slack 0.0088 vs ME-L0 0.0343, 4x). 'Only we are safe' is false at useful magnitudes. No speed/safety win for general geometry."
+    },
+    {
+      "id": "H7-hybrid", "parent": "R", "status": "partial",
+      "h": "Borrow CoACD's CUT structure but use the conservative carving leaf per region -> certified containment (max-outside=0) AT CoACD-comparable tightness, on general shapes.",
+      "test": "trial_hybrid.py: shapes=[axisL, rotL, torus]; compare CoACD-raw vs CoACD-AABB+carving on {max-outside, slack}.",
+      "evidence": "CONFIRMED certified containment (max-outside ~0 everywhere). Tightness: axisL H7 0.0120 < CoACD 0.0131 (WIN); rotL 0.0302 vs 0.0155 (2x looser); torus 0.0341 vs 0.0224 (1.5x looser). Cause: AXIS-aligned box leaf can't align to oriented pieces. -> spawn H7b."
+    },
+    {
+      "id": "H7b-oriented", "parent": "H7-hybrid", "status": "refuted",
+      "h": "Carve each piece in its ORIENTED (PCA) frame, not an axis box -> recover CoACD-level tightness on rotated/curved while staying certified.",
+      "test": "trial_hybrid_obb.py: rotL + torus; CoACD-raw vs H7-axis vs H7b-PCA on {max-outside, slack}.",
+      "evidence": "REFUTED. PCA box not tighter than axis box: rotL slack 0.0446 (PCA) vs 0.0302 (axis) vs 0.0201 (CoACD); torus 0.0420 vs 0.0414 vs 0.0268. Carving-leaf looseness is from capturing extra faces in the box region, not orientation. Collision/distance branch is now exhausted."
+    },
+    {
+      "id": "H1-prismatic", "parent": "R", "status": "open",
+      "h": "On prismatic/axis-aligned CAD parts, carving matches CoACD tightness AND is certified (max-outside=0).",
+      "test": "equal-piece tightness on bracket/plate/U-channel/cross prisms.",
+      "evidence": "partial: axis-L tie (ME 0.0119 vs CoACD 0.0122) and ME certified. Need more prismatic shapes."
+    },
+    {
+      "id": "H3-sublify", "parent": "R", "status": "CONFIRMED",
+      "h": "Progressive-Hull simplification (H-rep) cuts expanded-model polygon count a lot while staying conservative (bounded volume/Hausdorff).",
+      "test": "trial_proghull.py: greedy least-volume half-space removal on a carved sphere expansion.",
+      "evidence": "WIN. sphere 336 faces -> 178 (+4.7% vol) -> 110 (3x, +8.4%) -> 52 (+24%), volume monotonically grows => always conservative superset. More efficient than the merge-angle knob (110f@+8.4% vs 92f@+16%). ACTIONABLE: add as a conservative simplification pass to the library (serves the 'reduce mesh count' goal)."
+    },
+    {
+      "id": "H2-offset", "parent": "R", "status": "open",
+      "h": "For the ORIGINAL product (machining clearance EXPANSION), carving beats OpenVDB on poly-count/over-expansion at matched accuracy and on dependency weight.",
+      "test": "compare expansion vs OpenVDB level-set offset on CAD shapes.",
+      "evidence": null
+    },
+    {
+      "id": "H6-certificate", "parent": "R", "status": "open",
+      "h": "A machine-checkable containment certificate (the half-space inequalities) has buyers in formal-safety/certification contexts where 'empirically nearly conservative' (CoACD) is unacceptable.",
+      "test": "market/customer discovery, not code. Park until a code path needs it.",
+      "evidence": null
+    }
+  ]
+}
